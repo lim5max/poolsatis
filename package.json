@@ -1,0 +1,30 @@
+{
+  "name": "poolsatis",
+  "version": "0.1.0",
+  "description": "Agent-native product analytics platform",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "migrate": "tsx src/cli/migrate.ts",
+    "bootstrap": "tsx src/cli/bootstrap.ts",
+    "serve": "tsx src/cli/serve.ts",
+    "mcp": "tsx src/mcp/server.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "fastify": "^5.3.0",
+    "pg": "^8.16.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/pg": "^8.15.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0"
+  }
+}

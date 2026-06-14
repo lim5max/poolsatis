@@ -1,0 +1,179 @@
+# Модель данных
+
+Все таблицы metadata plane — Postgres. События — Event Store (см. [02-storage.md](02-storage.md)).
+
+## 1. Тенантность и доступ
+
+```sql
+CREATE TABLE organizations (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name        text NOT NULL,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE projects (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id      uuid NOT NULL REFERENCES organizations(id),
+  slug        text NOT NULL,              -- 'my-saas': человекочитаемый id для MCP/API
+  name        text NOT NULL,
+  timezone    text NOT NULL DEFAULT 'UTC',
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (org_id, slug)
+);
+
+CREATE TABLE api_keys (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id  uuid REFERENCES projects(id),     -- NULL для pt_ (скоуп в key_scopes)
+  org_id      uuid NOT NULL REFERENCES organizations(id),
+  kind        text NOT NULL CHECK (kind IN ('ingest','secret','personal')),
+  env         text NOT NULL DEFAULT 'prod',     -- имеет смысл для ingest-ключей
+  token_hash  text NOT NULL,                    -- храним только hash, сам токен показываем один раз
+  label       text,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  revoked_at  timestamptz
+);
+```
+
+Среда (`env`) — атрибут ключа, а не сущность: ingest-ключ `pk_…` выпускается на `prod`/`dev`, и все принятые им события автоматически помечаются этим env. Так невозможно «случайно» прислать дев-события в прод — у дев-сборки просто другой ключ.
+
+## 2. Events — неизменяемые факты
+
+Логическая схема (физическая — в адаптере хранилища):
+
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `project_id` | uuid | изоляция тенанта |
+| `env` | text | `prod` / `dev` / … — из ingest-ключа |
+| `event` | text | имя события, стандарт `object.action`: `checkout.completed` |
+| `timestamp` | timestamptz(ms) | время события (от клиента, с защитой от клоксью) |
+| `distinct_id` | text | идентификатор актора (id пользователя из продукта) |
+| `session_id` | text? | группировка в сессию, опционально |
+| `properties` | json | произвольные свойства события |
+| `registered` | bool | соответствует ли событие активной метрике реестра |
+| `ingested_at` | timestamptz | время приёма сервером |
+
+Правила:
+
+- **Append-only.** События не редактируются и не удаляются (кроме GDPR-удаления по `distinct_id`).
+- **Имена:** `snake_case`, формат `object.action`. Префикс `$` зарезервирован за системными событиями и свойствами (`$session_start`, `$utm_source`).
+- **`registered`:** ставится на ингесте сверкой с реестром метрик. Незарегистрированные события принимаются и хранятся — но платформа видит долю «дикой» инструментации по проекту (метрика качества данных, вход для инсайтов).
+
+### Идентификация акторов
+
+`distinct_id` — внешний id из продукта. MVP-допущение: продукт присылает стабильный id (агент при инструментации это обеспечивает — это часть стандарта). Склейка anonymous→identified (alias-таблица, как в PostHog) сознательно отложена на этап 3: она сильно усложняет query-слой, а agent-инструментация позволяет требовать стабильный id с первого дня.
+
+## 3. Entities — «статичные» данные с состоянием
+
+Изменяемые объекты продукта: пользователи, аккаунты, документы — всё, у чего есть текущее состояние, а не поток фактов.
+
+```sql
+CREATE TABLE entity_types (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id   uuid NOT NULL REFERENCES projects(id),
+  name         text NOT NULL,        -- 'user', 'account', 'document'
+  description  text NOT NULL,        -- зачем этот тип нужен (семантика обязательна)
+  prop_schema  jsonb,                -- JSON Schema свойств: рекомендательная, не блокирующая
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (project_id, name)
+);
+
+CREATE TABLE entities (
+  project_id   uuid NOT NULL REFERENCES projects(id),
+  entity_type  text NOT NULL,
+  entity_id    text NOT NULL,        -- внешний id из продукта
+  env          text NOT NULL DEFAULT 'prod',
+  properties   jsonb NOT NULL DEFAULT '{}',
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  updated_at   timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, env, entity_type, entity_id)
+);
+CREATE INDEX entities_props_gin ON entities USING gin (properties);
+```
+
+- Семантика записи — **upsert с merge свойств** (присланные ключи перезаписывают, остальные сохраняются; `null` удаляет ключ).
+- Событие ссылается на сущность через `distinct_id` (актор = entity типа `user`) и/или свойства-ссылки (`account_id` в `properties`).
+- История изменений свойств — не в MVP; при необходимости добавится append-таблица `entity_changes`.
+
+## 4. Metrics — реестр с семантикой (ядро платформы)
+
+```sql
+CREATE TABLE metrics (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id  uuid NOT NULL REFERENCES projects(id),
+  key         text NOT NULL,        -- 'checkout_conversion', стабильный id для API/MCP
+  name        text NOT NULL,        -- человекочитаемое имя
+  purpose     text NOT NULL,        -- ЗАЧЕМ собирается — обязательное, непустое
+  category    text CHECK (category IN
+                ('acquisition','activation','retention','revenue','referral','quality')),
+  type        text NOT NULL CHECK (type IN
+                ('count',          -- сколько раз произошло событие
+                 'unique_actors',  -- сколько уникальных distinct_id
+                 'value',          -- агрегат по числовому свойству (sum/avg/p90)
+                 'conversion',     -- доля акторов, дошедших от события A к B
+                 'state')),        -- агрегат по сущностям (count entities where ...)
+  source      jsonb NOT NULL,      -- декларация источника, см. ниже
+  status      text NOT NULL DEFAULT 'proposed'
+                CHECK (status IN ('proposed','active','deprecated')),
+  owner       text,                -- 'agent:claude' | 'user:email@…'
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (project_id, key)
+);
+```
+
+Поле `source` — что физически считаем:
+
+```jsonc
+// type=count / unique_actors
+{ "event": "checkout.completed",
+  "filters": [{ "property": "plan", "op": "eq", "value": "pro" }] }
+
+// type=value
+{ "event": "checkout.completed", "value_property": "amount", "agg": "sum" }
+
+// type=conversion
+{ "from": { "event": "checkout.started" },
+  "to":   { "event": "checkout.completed" },
+  "window_seconds": 3600 }
+
+// type=state — по сущностям
+{ "entity_type": "account",
+  "filters": [{ "property": "plan", "op": "ne", "value": "free" }],
+  "agg": "count" }
+```
+
+Жизненный цикл: агент регистрирует метрику как `proposed` → владелец (или агент с подтверждением) активирует → `active` метрики участвуют в сверке `registered` на ингесте → устаревшие переводятся в `deprecated`, но не удаляются (история запросов должна работать).
+
+## 5. Funnels и Insights
+
+```sql
+CREATE TABLE funnels (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id  uuid NOT NULL REFERENCES projects(id),
+  key         text NOT NULL,
+  name        text NOT NULL,
+  goal        text NOT NULL,        -- зачем воронка: 'довести нового юзера до первого экспорта'
+  steps       jsonb NOT NULL,       -- [{"metric_key":"signup","label":"Регистрация"}, …]
+  window_seconds integer NOT NULL DEFAULT 604800,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (project_id, key)
+);
+```
+
+Шаги воронки ссылаются на **метрики реестра**, не на сырые события. Это принципиально: воронка наследует семантику шагов, и инсайт-слой знает не только «конверсия шага 2→3 упала», но и «упала конверсия в активацию, цель которой — X».
+
+```sql
+CREATE TABLE insights (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id  uuid NOT NULL REFERENCES projects(id),
+  kind        text NOT NULL CHECK (kind IN ('manual','auto')),
+  title       text NOT NULL,
+  body        text NOT NULL,        -- markdown: находка + обоснование
+  query       jsonb,                -- Query DSL, которым воспроизводится находка
+  severity    text CHECK (severity IN ('info','warning','critical')),
+  status      text NOT NULL DEFAULT 'open' CHECK (status IN ('open','ack','resolved')),
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+```
+
+`manual` — сохранённые запросы/заметки через MCP; `auto` — продукция Insights Worker (этап 2). Дашборд в Poolsatis — это не отдельная сущность, а набор сохранённых запросов: агент пользователя строит дашборды на своей стороне из Query DSL, платформа хранит только определения.

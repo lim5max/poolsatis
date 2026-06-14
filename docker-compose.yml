@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: poolsatis
+      POSTGRES_PASSWORD: poolsatis
+      POSTGRES_DB: poolsatis
+    ports:
+      - "5444:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U poolsatis"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+volumes:
+  pgdata:

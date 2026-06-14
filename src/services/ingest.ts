@@ -1,0 +1,129 @@
+import type pg from 'pg';
+import type { EventStore, StorableEvent } from '../stores/eventStore.js';
+import { ingestEventSchema, type IngestEnvelope } from '../schemas.js';
+import { registeredEventNames } from './registry.js';
+
+const CLOCK_SKEW_FUTURE_MS = 5 * 60_000;
+const REGISTRY_CACHE_TTL_MS = 30_000;
+const BATCH_DEDUP_WINDOW = '24 hours';
+const BATCH_CLEANUP_EVERY = 100;
+
+export interface IngestResult {
+  accepted: number;
+  unregistered: number;
+  duplicate?: boolean;
+  errors?: Array<{ index: number; message: string }>;
+}
+
+interface CacheEntry {
+  names: Set<string>;
+  expiresAt: number;
+}
+
+/**
+ * Ingest pipeline: per-event validation (a bad event never sinks the batch),
+ * batch idempotency, clock-skew correction, and the registered-flag check
+ * against the active metric registry.
+ */
+export class IngestService {
+  private readonly registryCache = new Map<string, CacheEntry>();
+  private batchesSinceCleanup = 0;
+
+  constructor(
+    private readonly pool: pg.Pool,
+    private readonly eventStore: EventStore,
+  ) {}
+
+  async processBatch(
+    project: { id: string; retention_months: number },
+    env: string,
+    batch: IngestEnvelope,
+    now: Date = new Date(),
+  ): Promise<IngestResult> {
+    const rawEvents = batch.events;
+
+    if (batch.batch_id) {
+      // A replay is a duplicate only within the 24h window; a stale row is
+      // refreshed and the batch treated as new (per docs/04-http-api.md).
+      const inserted = await this.pool.query(
+        `INSERT INTO ingest_batches (project_id, env, batch_id)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (project_id, env, batch_id) DO UPDATE SET received_at = now()
+         WHERE ingest_batches.received_at < now() - interval '${BATCH_DEDUP_WINDOW}'`,
+        [project.id, env, batch.batch_id],
+      );
+      if (inserted.rowCount === 0) {
+        return { accepted: 0, unregistered: 0, duplicate: true };
+      }
+      if (++this.batchesSinceCleanup >= BATCH_CLEANUP_EVERY) {
+        this.batchesSinceCleanup = 0;
+        await this.pool.query(
+          `DELETE FROM ingest_batches
+           WHERE project_id = $1 AND received_at < now() - interval '${BATCH_DEDUP_WINDOW}'`,
+          [project.id],
+        );
+      }
+    }
+
+    const registered = await this.registeredNames(project.id);
+    const retentionFloor = new Date(now);
+    retentionFloor.setUTCMonth(retentionFloor.getUTCMonth() - project.retention_months);
+
+    const storable: StorableEvent[] = [];
+    const errors: Array<{ index: number; message: string }> = [];
+    let unregistered = 0;
+
+    rawEvents.forEach((raw, index) => {
+      const parsed = ingestEventSchema.safeParse(raw);
+      if (!parsed.success) {
+        const issue = parsed.error.issues[0];
+        errors.push({
+          index,
+          message: issue ? `${issue.path.join('.') || 'event'}: ${issue.message}` : 'invalid event',
+        });
+        return;
+      }
+      const e = parsed.data;
+      const properties: Record<string, unknown> = { ...e.properties };
+
+      let timestamp = e.timestamp ? new Date(e.timestamp) : now;
+      if (timestamp.getTime() > now.getTime() + CLOCK_SKEW_FUTURE_MS || timestamp < retentionFloor) {
+        timestamp = now;
+        properties.$clock_skew = true;
+      }
+
+      const isRegistered = registered.has(e.event);
+      if (!isRegistered) unregistered += 1;
+
+      storable.push({
+        projectId: project.id,
+        env,
+        event: e.event,
+        timestamp,
+        distinctId: e.distinct_id,
+        sessionId: e.session_id ?? null,
+        properties,
+        registered: isRegistered,
+      });
+    });
+
+    await this.eventStore.append(storable);
+
+    const result: IngestResult = { accepted: storable.length, unregistered };
+    if (errors.length > 0) result.errors = errors;
+    return result;
+  }
+
+  /** Drop the cached registry for a project (call after metric changes). */
+  invalidateRegistry(projectId: string): void {
+    this.registryCache.delete(projectId);
+  }
+
+  private async registeredNames(projectId: string): Promise<Set<string>> {
+    const cached = this.registryCache.get(projectId);
+    if (cached && cached.expiresAt > Date.now()) return cached.names;
+    const names = await registeredEventNames(this.pool, projectId);
+    this.registryCache.set(projectId, { names, expiresAt: Date.now() + REGISTRY_CACHE_TTL_MS });
+    return names;
+  }
+}
