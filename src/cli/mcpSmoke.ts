@@ -54,6 +54,11 @@ try {
   const warnings = await callTool('list_ingest_warnings', { project, env });
   const quality = await callTool('list_data_quality_issues', { project, env, limit: 50 });
 
+  const firstMetric = firstArrayItem(schema.metrics);
+  const firstMetricKey = typeof firstMetric?.key === 'string' ? firstMetric.key : null;
+  const metricUsage = firstMetricKey
+    ? await callTool('explain_metric_usage', { project, key: firstMetricKey, env, since_days: 30 })
+    : null;
   const firstFunnel = firstArrayItem(funnels.funnels);
   const firstFunnelKey = typeof firstFunnel?.key === 'string' ? firstFunnel.key : null;
   const funnelResult = firstFunnelKey
@@ -85,6 +90,14 @@ try {
     },
     warnings: warningRows.length,
     data_quality_issues: qualityIssues.length,
+    first_metric_usage: metricUsage
+      ? {
+          key: firstMetricKey,
+          source_events: asArray(metricUsage.source_events).length,
+          funnels: asArray((metricUsage.used_by as { funnels?: unknown } | undefined)?.funnels).length,
+          insights: asArray((metricUsage.used_by as { insights?: unknown } | undefined)?.insights).length,
+        }
+      : null,
     first_funnel: funnelResult
       ? {
           key: firstFunnelKey,

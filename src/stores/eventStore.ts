@@ -88,6 +88,13 @@ export interface EventNameStat {
   last_seen: string;
 }
 
+export interface EventStatsQuery {
+  projectId: string;
+  env: string;
+  events: string[];
+  sinceDays: number;
+}
+
 export interface EntityStatusEvidenceSpec {
   event: string;
   entity_type: string;
@@ -175,6 +182,7 @@ export interface EventStore {
   stickiness(q: IntervalActivityQuery): Promise<StickinessBin[]>;
   sample(q: SampleQuery): Promise<RawEvent[]>;
   eventNames(projectId: string, env: string, sinceDays: number): Promise<EventNameStat[]>;
+  eventStats(q: EventStatsQuery): Promise<EventNameStat[]>;
   entityStatusEvidence(q: EntityStatusEvidenceQuery): Promise<EntityStatusEvidence[]>;
   /**
    * Hard-delete events for a project. Optionally scope to one env and/or a

@@ -10,6 +10,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import {
+  deprecateMetricSchema,
   defineFunnelSchema, entitiesQuerySchema, funnelQuerySchema, lifecycleQuerySchema,
   registerEntityTypeSchema, registerMetricSchema, retentionQuerySchema, stickinessQuerySchema,
   trendQuerySchema, updateMetricSchema,
@@ -116,9 +117,28 @@ jsonTool(
 
 jsonTool(
   'update_metric',
-  'Update a registry metric: rename, refine purpose, change source, or move status (proposed → active → deprecated).',
+  'Update a registry metric: rename, refine purpose, change source, tags, or status proposed/active. Use deprecate_metric when retiring a metric.',
   { project, key: z.string(), patch: updateMetricSchema },
   wrap(({ project: slug, key, patch }) => api('PATCH', `/api/v1/projects/${slug}/metrics/${key}`, patch)),
+);
+
+jsonTool(
+  'deprecate_metric',
+  'Retire a metric with a required reason. Keeps history and the definition, removes it from active registration, and gives future agents context.',
+  { project, key: z.string(), reason: deprecateMetricSchema.shape.reason },
+  wrap(({ project: slug, key, reason }) => api('POST', `/api/v1/projects/${slug}/metrics/${key}/deprecate`, { reason })),
+);
+
+jsonTool(
+  'explain_metric_usage',
+  'Explain a metric: source events, recent observed event stats, funnels/insights that reference it, and guidance for delete/deprecate decisions.',
+  {
+    project,
+    key: z.string(),
+    env: z.string().default('prod'),
+    since_days: z.number().int().min(1).max(365).default(30),
+  },
+  wrap(({ project: slug, key, env, since_days }) => api('GET', `/api/v1/projects/${slug}/metrics/${key}/usage?env=${encodeURIComponent(env)}&since_days=${since_days}`)),
 );
 
 jsonTool(
@@ -140,7 +160,7 @@ jsonTool(
 
 jsonTool(
   'delete_metric',
-  'Hard-delete a metric from the registry (e.g. one you registered by mistake). Refuses if a funnel references it. Prefer update_metric status=deprecated for routine retirement.',
+  'Hard-delete a metric from the registry (e.g. one you registered by mistake). Refuses if a funnel references it. Prefer deprecate_metric for routine retirement.',
   { project, key: z.string() },
   wrap(({ project: slug, key }) => api('DELETE', `/api/v1/projects/${slug}/metrics/${key}`)),
 );

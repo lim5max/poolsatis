@@ -106,6 +106,39 @@ describe('metric registry', () => {
     expect(res.body.status).toBe('active');
   });
 
+  it('deprecates a metric only through the dedicated endpoint with a reason', async () => {
+    await api(env, env.secretToken, 'POST', `${P()}/metrics`, {
+      key: 'legacy_metric',
+      name: 'Legacy metric',
+      purpose: 'A metric used to verify retirement metadata and safe deprecation.',
+      type: 'count',
+      source: { event: 'legacy.happened' },
+    });
+
+    const rawPatch = await api(env, env.secretToken, 'PATCH', `${P()}/metrics/legacy_metric`, {
+      status: 'deprecated',
+    });
+    expect(rawPatch.status).toBe(400);
+    expect(rawPatch.body.error.code).toBe('use_deprecate_metric');
+
+    const shortReason = await api(env, env.secretToken, 'POST', `${P()}/metrics/legacy_metric/deprecate`, {
+      reason: 'old',
+    });
+    expect(shortReason.status).toBe(400);
+    expect(shortReason.body.error.code).toBe('validation_error');
+
+    const res = await api(env, env.secretToken, 'POST', `${P()}/metrics/legacy_metric/deprecate`, {
+      reason: 'Replaced by the checkout completed metric after the instrumentation cleanup.',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      key: 'legacy_metric',
+      status: 'deprecated',
+      deprecation_reason: 'Replaced by the checkout completed metric after the instrumentation cleanup.',
+    });
+    expect(new Date(res.body.deprecated_at).toString()).not.toBe('Invalid Date');
+  });
+
   it('lists metrics filtered by status', async () => {
     const res = await api(env, env.secretToken, 'GET', `${P()}/metrics?status=active`);
     expect(res.status).toBe(200);
@@ -174,6 +207,62 @@ describe('project schema', () => {
     expect(res.body.funnels.map((f: any) => f.key)).toContain('purchase_funnel');
     expect(res.body.entity_types.map((t: any) => t.name)).toContain('account');
     expect(res.body).toHaveProperty('observed_events_30d');
+  });
+});
+
+describe('metric usage explanations', () => {
+  it('explains where a metric is used and which source events were observed', async () => {
+    await api(env, env.ingestToken, 'POST', '/i/v1/events', {
+      events: [{ event: 'checkout.completed', distinct_id: 'usage-user-1' }],
+    });
+    await api(env, env.secretToken, 'POST', `${P()}/insights`, {
+      title: 'Checkout investigation',
+      body: 'Manual note that should be linked back to the checkout metric.',
+      query: { kind: 'trend', metric: 'checkout_completed', date_from: '-7d' },
+      severity: 'info',
+    });
+
+    const res = await api(env, env.secretToken, 'GET', `${P()}/metrics/checkout_completed/usage?env=prod&since_days=30`);
+    expect(res.status).toBe(200);
+    expect(res.body.metric.key).toBe('checkout_completed');
+    expect(res.body.source_events).toEqual(['checkout.completed']);
+    expect(res.body.observed_events).toContainEqual(expect.objectContaining({
+      event: 'checkout.completed',
+      registered_share: 1,
+    }));
+    expect(res.body.used_by.funnels).toContainEqual(expect.objectContaining({
+      key: 'purchase_funnel',
+      goal: 'Take a new signup to their first completed checkout.',
+    }));
+    expect(res.body.used_by.insights).toContainEqual(expect.objectContaining({
+      title: 'Checkout investigation',
+      status: 'open',
+    }));
+    expect(res.body.guidance.some((line: string) => line.includes('delete_metric'))).toBe(true);
+  });
+
+  it('does not hide older insight references behind a recent-insights limit', async () => {
+    await api(env, env.secretToken, 'POST', `${P()}/insights`, {
+      title: 'Old checkout reference',
+      body: 'This old note must still be returned by metric usage.',
+      query: { kind: 'trend', metric: 'checkout_completed', date_from: '-30d' },
+      severity: 'info',
+    });
+    for (let i = 0; i < 260; i++) {
+      const res = await api(env, env.secretToken, 'POST', `${P()}/insights`, {
+        title: `Recent unrelated insight ${i}`,
+        body: 'Unrelated note that should not hide older metric references.',
+        query: { kind: 'trend', metric: 'signup_completed', date_from: '-30d', index: i },
+        severity: 'info',
+      });
+      expect(res.status).toBe(201);
+    }
+
+    const res = await api(env, env.secretToken, 'GET', `${P()}/metrics/checkout_completed/usage?env=prod&since_days=30`);
+    expect(res.status).toBe(200);
+    expect(res.body.used_by.insights).toContainEqual(expect.objectContaining({
+      title: 'Old checkout reference',
+    }));
   });
 });
 

@@ -1,5 +1,5 @@
 import type {
-  ApiKeyRow, DataQualityResponse, EntityRow, Funnel, IngestWarning, Metric, MetricStatus,
+  ApiKeyRow, DataQualityResponse, EntityRow, Funnel, IngestWarning, Metric, MetricStatus, MetricUsage,
   PersonSummary, ProjectSchema, ProjectWithStats, SampleEvent, SampleFilter,
 } from './types';
 
@@ -57,8 +57,18 @@ export class PoolstatisClient {
     return this.req<{ metrics: Metric[] }>('GET', `/api/v1/projects/${slug}/metrics${suffix}`).then((r) => r.metrics);
   }
 
-  setMetricStatus(slug: string, key: string, status: MetricStatus) {
+  setMetricStatus(slug: string, key: string, status: Exclude<MetricStatus, 'deprecated'>) {
     return this.req<Metric>('PATCH', `/api/v1/projects/${slug}/metrics/${key}`, { status });
+  }
+
+  deprecateMetric(slug: string, key: string, reason: string) {
+    return this.req<Metric>('POST', `/api/v1/projects/${slug}/metrics/${key}/deprecate`, { reason });
+  }
+
+  metricUsage(slug: string, key: string, q: { env: string; sinceDays?: number }) {
+    const qs = new URLSearchParams({ env: q.env });
+    if (q.sinceDays !== undefined) qs.set('since_days', String(q.sinceDays));
+    return this.req<MetricUsage>('GET', `/api/v1/projects/${slug}/metrics/${key}/usage?${qs}`);
   }
 
   setMetricTags(slug: string, key: string, tags: string[]) {

@@ -49,7 +49,7 @@ export async function createTestEnv(): Promise<TestEnv> {
 export async function api(
   env: TestEnv,
   token: string,
-  method: 'GET' | 'POST' | 'PATCH',
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
   url: string,
   payload?: unknown,
 ): Promise<{ status: number; body: any }> {

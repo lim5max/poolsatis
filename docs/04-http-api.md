@@ -61,6 +61,8 @@ GET    /api/v1/projects
 GET    /api/v1/projects/{slug}/schema
 POST   /api/v1/projects/{slug}/metrics
 PATCH  /api/v1/projects/{slug}/metrics/{key}
+POST   /api/v1/projects/{slug}/metrics/{key}/deprecate
+GET    /api/v1/projects/{slug}/metrics/{key}/usage
 GET    /api/v1/projects/{slug}/metrics
 POST   /api/v1/projects/{slug}/entity-types
 POST   /api/v1/projects/{slug}/funnels
@@ -111,6 +113,39 @@ POST   /api/v1/projects/{slug}/insights
 Ответ любого запроса включает `meta`: `{computed_at, date_range, sampling: null}` — задел под кеширование и сэмплирование без смены контракта.
 
 Принципиально: **trend и funnel принимают только ключи метрик реестра**, не сырые имена событий. Хочешь график — зарегистрируй метрику (с purpose). Это та самая воронка принуждения к семантике, на которой стоит платформа; исключение — `sample_events` для отладки.
+
+`query_funnel` возвращает семантику каждого шага вместе с числами:
+
+```jsonc
+{
+  "steps": [
+    {
+      "label": "Signup",
+      "metric_key": "signup_completed",
+      "purpose": "Counts completed signups as the activation entry point.",
+      "category": "activation",
+      "actors": 120,
+      "conversion_from_prev": 1,
+      "conversion_from_start": 1
+    }
+  ]
+}
+```
+
+## Metric retirement and usage
+
+```http
+POST /api/v1/projects/{slug}/metrics/{key}/deprecate
+{ "reason": "Replaced by a stricter checkout success metric." }
+```
+
+Обычный `PATCH /metrics/{key}` больше не переводит метрику в `deprecated`: retirement требует причину, чтобы будущий агент понял, почему метрика убрана. История и definition остаются, а событие больше не участвует в `registered` после ухода из `active`.
+
+```http
+GET /api/v1/projects/{slug}/metrics/{key}/usage?env=prod&since_days=30
+```
+
+Возвращает саму метрику, source events, observed event stats за период, воронки/insights, где metric key используется, и `guidance` для решения `delete_metric` vs `deprecate_metric`.
 
 ## Data quality
 

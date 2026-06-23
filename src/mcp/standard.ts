@@ -161,8 +161,9 @@ Minimal, high-signal sets. Adapt names to the product; keep the shape.
   "registered" data-quality signal.
 - The project owner (or you, on their explicit say-so) **activates** them. Only
   \`active\` metrics mark matching events as registered on ingest.
-- When a metric is retired, set it **\`deprecated\`** — never delete; historical
-  queries must keep working.
+- When a metric is retired, call **\`deprecate_metric\`** with a real reason —
+  never delete; historical queries must keep working and future agents need to
+  know why the metric was replaced.
 
 ---
 

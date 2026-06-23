@@ -33,7 +33,9 @@ register_metric(project, {key, name, purpose, category, tags?, type, source})
   // purpose обязателен; tags — свободные метки (фича/north-star), нормализуются (lowercase, dedupe)
 
 update_metric(project, key, patch)   // включая активацию {status:'active'} и tags
-delete_metric(project, key)          // отказ, если на метрику ссылается воронка
+deprecate_metric(project, key, reason)
+explain_metric_usage(project, key, {env?, since_days?})
+delete_metric(project, key)          // hard delete; отказ, если на метрику ссылается воронка
 list_metrics(project, {status?, category?})
 
 register_entity_type(project, {name, description, prop_schema?})
@@ -50,6 +52,7 @@ delete_funnel(project, key)
 ```
 query_trend(project, {metric, date_from, date_to?, interval, breakdown?, env?})
 query_funnel(project, {funnel | steps, date_from, date_to?, env?})
+  // каждый step возвращает metric_key, purpose, category, actors и conversion_*
 query_retention(project, {start_metric, return_metric?, interval, periods, date_from, env?})
 query_lifecycle(project, {metric, interval, date_from, env?})   // new/returning/resurrecting/dormant
 query_stickiness(project, {metric, interval, date_from, env?})
@@ -77,7 +80,7 @@ resolve_insight(project, id, {status: 'ack'|'resolved'})
 1. **Тул = одно намерение агента.** Не «универсальный query endpoint с 20 параметрами», а отдельные тулы под trend/funnel/entities — так агент реже ошибается в параметрах, а описания тулов короче.
 2. **Ошибки учат.** Ответ на невалидный вызов содержит исправление: `register_metric` с занятым key возвращает существующую метрику и подсказку «используй update_metric или другой key». Агент — основной пользователь, и сообщение об ошибке — это его документация.
 3. **Ингеста в MCP нет.** События шлёт продукт по HTTP в рантайме, а не агент в чате. Единственное исключение — `sample_events` для проверки, что инструментация работает.
-4. **Запись метаданных безопасна по умолчанию.** Всё, что создаёт агент, рождается `proposed`; активация — отдельное действие, которое владелец может оставить за собой.
+4. **Запись метаданных безопасна по умолчанию.** Всё, что создаёт агент, рождается `proposed`; активация — отдельное действие, которое владелец может оставить за собой. Retirement идёт через `deprecate_metric(reason)`, чтобы следующий агент видел, почему метрика больше не используется.
 
 ## Транспорт
 

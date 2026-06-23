@@ -139,12 +139,18 @@ export function Meter({ value }: { value: number }) {
 // ===== toolbar / search / filters =====
 
 export function Toolbar({ left, center, right }: { left?: ReactNode; center?: ReactNode; right?: ReactNode }) {
-  return <div className="flex items-center gap-3 px-5 py-3 border-b">{left}{center}<span className="flex-1" />{right}</div>;
+  return (
+    <div className="flex flex-wrap items-center gap-3 px-5 py-3 border-b">
+      {left && <div className="min-w-0">{left}</div>}
+      {center && <div className="flex min-w-0 flex-wrap items-center gap-2">{center}</div>}
+      {right && <div className="ml-auto flex flex-wrap items-center gap-2">{right}</div>}
+    </div>
+  );
 }
 
 export function SearchInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
   return (
-    <div className="relative min-w-56">
+    <div className="relative min-w-0 w-full sm:min-w-56 sm:w-auto">
       <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-4 text-muted-foreground pointer-events-none" />
       <Input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder ?? 'Search…'} className="pl-8 h-9" />
     </div>

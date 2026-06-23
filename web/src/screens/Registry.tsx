@@ -5,7 +5,7 @@ import { useStore, useAsync } from '../store';
 import {
   Loading, ErrorNote, CategoryChip, StatusBadge, TypeTag, EmptyState, Panel,
   Toolbar, SearchInput, FilterChips, CategoryFilter, GroupBy, Overflow,
-  Confirm, DangerConfirm, NumberedStepChips, VerticalStepper, type Chip,
+  DangerConfirm, NumberedStepChips, VerticalStepper, type Chip,
 } from '../components/ui';
 import { Card } from '@/components/ui/card';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
@@ -28,11 +28,13 @@ export function Registry() {
 
   return (
     <Tabs defaultValue="metrics" className="gap-4">
-      <TabsList>
-        <TabsTrigger value="metrics">Metrics · {data.metrics.length}</TabsTrigger>
-        <TabsTrigger value="funnels">Funnels · {data.funnels.length}</TabsTrigger>
-        <TabsTrigger value="entities">Entity types · {data.entity_types.length}</TabsTrigger>
-      </TabsList>
+      <div className="max-w-full overflow-x-auto pb-1">
+        <TabsList className="w-max">
+          <TabsTrigger value="metrics">Metrics · {data.metrics.length}</TabsTrigger>
+          <TabsTrigger value="funnels">Funnels · {data.funnels.length}</TabsTrigger>
+          <TabsTrigger value="entities">Entity types · {data.entity_types.length}</TabsTrigger>
+        </TabsList>
+      </div>
       <TabsContent value="metrics"><MetricsTable metrics={data.metrics} onChanged={reload} /></TabsContent>
       <TabsContent value="funnels"><FunnelsTable funnels={data.funnels} /></TabsContent>
       <TabsContent value="entities"><EntityTypesTable types={data.entity_types} /></TabsContent>
@@ -97,7 +99,8 @@ function MetricsTable({ metrics, onChanged }: { metrics: Metric[]; onChanged: ()
     if (kind === 'cat') toggle(cats, setCats, v); else if (kind === 'st') toggle(statuses, setStatuses, v); else toggle(tagSel, setTagSel, v);
   };
 
-  const setStatus = async (key: string, status: MetricStatus) => { setBusy(key); try { await client!.setMetricStatus(project!, key, status); onChanged(); } finally { setBusy(null); } };
+  const setStatus = async (key: string, status: Exclude<MetricStatus, 'deprecated'>) => { setBusy(key); try { await client!.setMetricStatus(project!, key, status); onChanged(); } finally { setBusy(null); } };
+  const deprecate = async (key: string, reason: string) => { setBusy(key); try { await client!.deprecateMetric(project!, key, reason); onChanged(); } finally { setBusy(null); } };
   const del = async (key: string) => { setBusy(key); try { await client!.deleteMetric(project!, key); onChanged(); } finally { setBusy(null); } };
   const saveTags = async (key: string, tags: string[]) => { setBusy(key); try { await client!.setMetricTags(project!, key, tags); onChanged(); } finally { setBusy(null); } };
   const clickSort = (k: SortKey) => setSort((s) => ({ key: k, dir: s.key === k && s.dir === 'asc' ? 'desc' : 'asc' }));
@@ -146,9 +149,9 @@ function MetricsTable({ metrics, onChanged }: { metrics: Metric[]; onChanged: ()
         </div>
       )}
       {deprecating && (
-        <Confirm title={`Deprecate ${deprecating.name}?`} tone="warn" confirmLabel="Deprecate"
-          body="New events stop counting toward this metric; existing data and the definition are kept. You can re-activate any time."
-          onCancel={() => setDeprecating(null)} onConfirm={async () => { await setStatus(deprecating.key, 'deprecated'); setDeprecating(null); }} />
+        <DeprecateDialog metric={deprecating}
+          onCancel={() => setDeprecating(null)}
+          onConfirm={async (reason) => { await deprecate(deprecating.key, reason); setDeprecating(null); }} />
       )}
       {deleting && (
         <DangerConfirm title={`Delete ${deleting.name}?`} blastRadius="Removes the metric definition permanently."
@@ -162,6 +165,52 @@ function MetricsTable({ metrics, onChanged }: { metrics: Metric[]; onChanged: ()
           onSave={async (tags) => { await saveTags(editing.key, tags); setEditing(null); }} />
       )}
     </Card>
+  );
+}
+
+function DeprecateDialog({ metric, onCancel, onConfirm }: { metric: Metric; onCancel: () => void; onConfirm: (reason: string) => Promise<void> }) {
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const canSubmit = reason.trim().length >= 10;
+  const go = async () => {
+    if (!canSubmit) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onConfirm(reason);
+    } catch (err) {
+      setError((err as Error).message ?? 'failed to deprecate metric');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog open onOpenChange={(o) => !o && !busy && onCancel()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="serif font-normal text-xl">Deprecate {metric.name}?</DialogTitle>
+          <DialogDescription>New events stop counting toward this metric; existing data and the definition are kept.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-1.5">
+          <label className="text-xs text-muted-foreground">Reason</label>
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Replaced by a more precise activation metric."
+            className="min-h-24 w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50"
+            autoFocus
+          />
+        </div>
+        {error && <ErrorNote>{error}</ErrorNote>}
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel} disabled={busy}>Cancel</Button>
+          <Button onClick={go} disabled={!canSubmit || busy} className="bg-amber-500 text-black hover:bg-amber-400">
+            {busy && <Loader2 className="size-4 animate-spin" />}Deprecate
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -241,7 +290,14 @@ function Section({ group, busy, onActivate, onDeprecate, onDelete, onEditTags, o
           <TableCell><TypeTag type={m.type} /></TableCell>
           <TableCell className="text-xs text-muted-foreground whitespace-nowrap font-mono">{sourceSummary(m)}</TableCell>
           <TableCell className="max-w-sm"><div className="truncate text-xs text-muted-foreground italic" title={m.purpose}>{m.purpose}</div></TableCell>
-          <TableCell><StatusBadge status={m.status} /></TableCell>
+          <TableCell>
+            <StatusBadge status={m.status} />
+            {m.status === 'deprecated' && (
+              <div className="mt-1 max-w-xs truncate text-xs text-muted-foreground" title={m.deprecation_reason ?? undefined}>
+                {m.deprecation_reason ?? 'No reason recorded'}
+              </div>
+            )}
+          </TableCell>
           <TableCell className="text-right whitespace-nowrap">
             {busy === m.key ? <Loader2 className="size-4 animate-spin inline" /> : (
               <div className="inline-flex items-center gap-1.5">
@@ -283,10 +339,12 @@ function FunnelsTable({ funnels }: { funnels: Funnel[] }) {
   if (funnels.length === 0) return <Panel><EmptyState headline="No funnels" lead="defined from registry metrics via MCP or API" /></Panel>;
   return (
     <Panel title="Funnels">
-      <Table>
-        <TableHeader><TableRow><TableHead className="w-7" /><TableHead>Funnel</TableHead><TableHead>Goal</TableHead><TableHead>Steps</TableHead><TableHead>Window</TableHead></TableRow></TableHeader>
-        <TableBody>{funnels.map((f) => <FunnelRow key={f.key} funnel={f} />)}</TableBody>
-      </Table>
+      <div className="overflow-x-auto">
+        <Table>
+          <TableHeader><TableRow><TableHead className="w-7" /><TableHead>Funnel</TableHead><TableHead>Goal</TableHead><TableHead>Steps</TableHead><TableHead>Window</TableHead></TableRow></TableHeader>
+          <TableBody>{funnels.map((f) => <FunnelRow key={f.key} funnel={f} />)}</TableBody>
+        </Table>
+      </div>
     </Panel>
   );
 }
@@ -311,10 +369,12 @@ function EntityTypesTable({ types }: { types: { name: string; description: strin
   if (types.length === 0) return <Panel><EmptyState headline="No entity types" lead="register them via MCP or API before upserting entities" /></Panel>;
   return (
     <Panel title="Entity types">
-      <Table>
-        <TableHeader><TableRow><TableHead>Type</TableHead><TableHead>Description</TableHead></TableRow></TableHeader>
-        <TableBody>{types.map((t) => <TableRow key={t.name}><TableCell className="font-medium">{t.name}</TableCell><TableCell><div className="text-xs text-muted-foreground italic">{t.description}</div></TableCell></TableRow>)}</TableBody>
-      </Table>
+      <div className="overflow-x-auto">
+        <Table>
+          <TableHeader><TableRow><TableHead>Type</TableHead><TableHead>Description</TableHead></TableRow></TableHeader>
+          <TableBody>{types.map((t) => <TableRow key={t.name}><TableCell className="font-medium">{t.name}</TableCell><TableCell><div className="text-xs text-muted-foreground italic">{t.description}</div></TableCell></TableRow>)}</TableBody>
+        </Table>
+      </div>
     </Panel>
   );
 }

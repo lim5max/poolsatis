@@ -4,7 +4,7 @@
 
 ## Executive summary
 
-Poolstatis already owns the hard, differentiating half of PostHog. The metadata plane — a metric registry with a mandatory `purpose`, funnels with a `goal`, entities with merge-upsert, the discriminated-union Query DSL, an MCP-first surface (15 tools), and a partitioned immutable event store — is in place and is *architecturally cleaner* than PostHog's retrofitted equivalents. The Entity primitive already generalizes both PostHog "persons" and "groups"; the registry is a stronger version of PostHog's taxonomy.
+Poolstatis already owns the hard, differentiating half of PostHog. The metadata plane — a metric registry with a mandatory `purpose`, funnels with a `goal`, entities with merge-upsert, the discriminated-union Query DSL, an MCP-first surface, and a partitioned immutable event store — is in place and is *architecturally cleaner* than PostHog's retrofitted equivalents. The Entity primitive already generalizes both PostHog "persons" and "groups"; the registry is a stronger version of PostHog's taxonomy.
 
 The gaps fall into three buckets:
 

@@ -1,6 +1,7 @@
 import type pg from 'pg';
 import {
   metricSourceSchemas,
+  type DeprecateMetricInput,
   type DefineFunnelInput,
   type RegisterMetricInput,
   type UpdateMetricInput,
@@ -18,10 +19,12 @@ export interface Metric {
   source: Record<string, unknown>;
   status: 'proposed' | 'active' | 'deprecated';
   owner: string | null;
+  deprecation_reason: string | null;
+  deprecated_at: string | null;
 }
 
 const METRIC_COLS =
-  'id, key, name, purpose, category, tags, type, source, status, owner';
+  'id, key, name, purpose, category, tags, type, source, status, owner, deprecation_reason, deprecated_at';
 
 /** Free-form tags are an open facet alongside the curated AARRR category:
  *  lowercased, trimmed, de-duplicated, order-preserved. */
@@ -86,6 +89,13 @@ export async function updateMetric(
   patch: UpdateMetricInput,
 ): Promise<Metric> {
   const existing = await getMetric(pool, projectId, key);
+  if ((patch as { status?: string }).status === 'deprecated') {
+    throw badRequest(
+      'use_deprecate_metric',
+      'deprecated metrics must include a retirement reason',
+      'call deprecate_metric or POST /metrics/{key}/deprecate with a reason so future agents understand why it was retired',
+    );
+  }
   if (patch.source !== undefined) {
     metricSourceSchemas[existing.type].parse(patch.source);
   }
@@ -97,6 +107,8 @@ export async function updateMetric(
        status = COALESCE($7, status),
        source = COALESCE($8, source),
        tags = COALESCE($9, tags),
+       deprecation_reason = CASE WHEN $7 IN ('active', 'proposed') THEN NULL ELSE deprecation_reason END,
+       deprecated_at = CASE WHEN $7 IN ('active', 'proposed') THEN NULL ELSE deprecated_at END,
        updated_at = now()
      WHERE project_id = $1 AND key = $2
      RETURNING ${METRIC_COLS}`,
@@ -108,6 +120,26 @@ export async function updateMetric(
   );
   // The metric can disappear between getMetric and the UPDATE.
   if (!rows[0]) throw notFound('metric');
+  return rows[0];
+}
+
+export async function deprecateMetric(
+  pool: pg.Pool,
+  projectId: string,
+  key: string,
+  input: DeprecateMetricInput,
+): Promise<Metric> {
+  const { rows } = await pool.query(
+    `UPDATE metrics SET
+       status = 'deprecated',
+       deprecation_reason = $3,
+       deprecated_at = COALESCE(deprecated_at, now()),
+       updated_at = now()
+     WHERE project_id = $1 AND key = $2
+     RETURNING ${METRIC_COLS}`,
+    [projectId, key, input.reason],
+  );
+  if (!rows[0]) throw notFound('metric', `no metric "${key}" in the registry — call list_metrics first`);
   return rows[0];
 }
 

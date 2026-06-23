@@ -83,7 +83,9 @@ just ask: *"instrument this app with Poolstatis."* The agent will:
 ### 3. Activate
 
 Open the admin **Registry** tab → metrics arrive as `proposed` → click **activate**
-on the ones you want counted. (Or `update_metric` via MCP.)
+on the ones you want counted. (Or `update_metric` with `{status:"active"}` via MCP.)
+When a metric is replaced, use `deprecate_metric` with a real reason instead of
+hard-deleting it; future agents need that context.
 
 ---
 

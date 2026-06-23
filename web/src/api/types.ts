@@ -17,6 +17,8 @@ export interface Metric {
   source: Record<string, unknown>;
   status: MetricStatus;
   owner: string | null;
+  deprecation_reason: string | null;
+  deprecated_at: string | null;
 }
 
 export interface FunnelStep {
@@ -132,6 +134,19 @@ export interface DataQualityIssue {
 export interface DataQualityResponse {
   issues: DataQualityIssue[];
   checked: { terminal_event_specs: number; evidence_rows: number };
+}
+
+export interface MetricUsage {
+  metric: Metric;
+  env: string;
+  since_days: number;
+  source_events: string[];
+  observed_events: ObservedEvent[];
+  used_by: {
+    funnels: Array<{ key: string; name: string; goal: string; step_labels: string[]; window_seconds: number }>;
+    insights: Array<{ id: string; title: string; status: string; severity: string | null; created_at: string }>;
+  };
+  guidance: string[];
 }
 
 export type KeyKind = 'ingest' | 'secret' | 'personal';

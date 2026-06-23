@@ -26,7 +26,15 @@ export type QueryResult =
   | { kind: 'trend'; series: Array<{ bucket: string; value: number; breakdown_value?: string }>; meta: QueryMeta }
   | {
       kind: 'funnel';
-      steps: Array<{ label: string; actors: number; conversion_from_prev: number; conversion_from_start: number }>;
+      steps: Array<{
+        label: string;
+        metric_key: string;
+        purpose: string;
+        category: string | null;
+        actors: number;
+        conversion_from_prev: number;
+        conversion_from_start: number;
+      }>;
       meta: QueryMeta;
     }
   | { kind: 'entities'; entities: Array<{ entity_id: string; properties: Record<string, unknown>; updated_at: string }>; meta: QueryMeta }
@@ -206,6 +214,9 @@ export class QueryService {
       kind: 'funnel',
       steps: counts.map((actors, i) => ({
         label: stepDefs[i]!.label,
+        metric_key: stepDefs[i]!.metric.key,
+        purpose: stepDefs[i]!.metric.purpose,
+        category: stepDefs[i]!.metric.category,
         actors,
         conversion_from_prev: i === 0 ? 1 : ratio(actors, counts[i - 1]!),
         conversion_from_start: i === 0 ? 1 : ratio(actors, first),

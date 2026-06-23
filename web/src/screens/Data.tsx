@@ -39,13 +39,15 @@ export function Data() {
 
   return (
     <Tabs value={tab} onValueChange={setTab} className="gap-4">
-      <div className="flex items-center justify-between">
-        <TabsList>
-          <TabsTrigger value="health">Data health</TabsTrigger>
-          <TabsTrigger value="events">Event stream</TabsTrigger>
-          <TabsTrigger value="entities">Entities</TabsTrigger>
-          <TabsTrigger value="warnings">Warnings</TabsTrigger>
-        </TabsList>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="max-w-full overflow-x-auto pb-1">
+          <TabsList className="w-max">
+            <TabsTrigger value="health">Data health</TabsTrigger>
+            <TabsTrigger value="events">Event stream</TabsTrigger>
+            <TabsTrigger value="entities">Entities</TabsTrigger>
+            <TabsTrigger value="warnings">Warnings</TabsTrigger>
+          </TabsList>
+        </div>
         <EnvSelect />
       </div>
       <TabsContent value="health"><Health observed={schema.data.observed_events_30d} /></TabsContent>
@@ -77,19 +79,21 @@ function Health({ observed }: { observed: ObservedEvent[] }) {
       <DataQualityPanel loading={quality.loading} error={quality.error} issues={qualityIssues} />
       <Panel title="Observed events · 30 days">
         {events.length === 0 ? <EmptyState headline="No events yet" lead="send some to the ingest API to see them here" /> : (
-          <Table>
-            <TableHeader><TableRow><TableHead>Event</TableHead><TableHead className="w-56">Registered</TableHead><TableHead className="text-right w-28">Count</TableHead><TableHead>Last seen</TableHead></TableRow></TableHeader>
-            <TableBody>
-              {events.map((e) => (
-                <TableRow key={e.event}>
-                  <TableCell className={cn('font-medium', e.registered_share < 0.999 && 'text-destructive')}>{e.event}</TableCell>
-                  <TableCell><div className="flex items-center gap-2.5"><div className="flex-1"><Meter value={e.registered_share} /></div><span className="text-xs tabular-nums w-9 text-right">{fmtPct(e.registered_share)}</span></div></TableCell>
-                  <TableCell className="text-right tabular-nums">{fmtNum(e.count)}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{new Date(e.last_seen).toLocaleString()}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader><TableRow><TableHead>Event</TableHead><TableHead className="w-56">Registered</TableHead><TableHead className="text-right w-28">Count</TableHead><TableHead>Last seen</TableHead></TableRow></TableHeader>
+              <TableBody>
+                {events.map((e) => (
+                  <TableRow key={e.event}>
+                    <TableCell className={cn('font-medium', e.registered_share < 0.999 && 'text-destructive')}>{e.event}</TableCell>
+                    <TableCell><div className="flex items-center gap-2.5"><div className="flex-1"><Meter value={e.registered_share} /></div><span className="text-xs tabular-nums w-9 text-right">{fmtPct(e.registered_share)}</span></div></TableCell>
+                    <TableCell className="text-right tabular-nums">{fmtNum(e.count)}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{new Date(e.last_seen).toLocaleString()}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         )}
       </Panel>
     </div>
@@ -104,29 +108,31 @@ function DataQualityPanel({ loading, error, issues }: { loading: boolean; error:
       {issues && (issues.length === 0 ? (
         <EmptyState headline="No conflicts" lead="terminal events match current entity status" />
       ) : (
-        <Table>
-          <TableHeader><TableRow><TableHead>Entity</TableHead><TableHead>Conflict</TableHead><TableHead>Evidence</TableHead><TableHead>Updated</TableHead></TableRow></TableHeader>
-          <TableBody>
-            {issues.map((issue) => (
-              <TableRow key={`${issue.entity_type}:${issue.entity_id}:${issue.event}`}>
-                <TableCell>
-                  <div className="font-medium">{issue.entity_id}</div>
-                  <div className="text-xs text-muted-foreground font-mono">{issue.entity_type}</div>
-                </TableCell>
-                <TableCell className="text-sm">
-                  <span className="font-mono">{issue.current_status}</span>
-                  <span className="text-muted-foreground"> should be </span>
-                  <span className="font-mono text-destructive">{issue.expected_status}</span>
-                </TableCell>
-                <TableCell className="text-xs text-muted-foreground">
-                  <div className="font-mono text-foreground">{issue.event}</div>
-                  <div>{fmtNum(issue.evidence_events)} event{issue.evidence_events === 1 ? '' : 's'} · {new Date(issue.last_event_at).toLocaleString()}</div>
-                </TableCell>
-                <TableCell className="text-xs text-muted-foreground">{new Date(issue.entity_updated_at).toLocaleString()}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader><TableRow><TableHead>Entity</TableHead><TableHead>Conflict</TableHead><TableHead>Evidence</TableHead><TableHead>Updated</TableHead></TableRow></TableHeader>
+            <TableBody>
+              {issues.map((issue) => (
+                <TableRow key={`${issue.entity_type}:${issue.entity_id}:${issue.event}`}>
+                  <TableCell>
+                    <div className="font-medium">{issue.entity_id}</div>
+                    <div className="text-xs text-muted-foreground font-mono">{issue.entity_type}</div>
+                  </TableCell>
+                  <TableCell className="text-sm">
+                    <span className="font-mono">{issue.current_status}</span>
+                    <span className="text-muted-foreground"> should be </span>
+                    <span className="font-mono text-destructive">{issue.expected_status}</span>
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    <div className="font-mono text-foreground">{issue.event}</div>
+                    <div>{fmtNum(issue.evidence_events)} event{issue.evidence_events === 1 ? '' : 's'} · {new Date(issue.last_event_at).toLocaleString()}</div>
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{new Date(issue.entity_updated_at).toLocaleString()}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       ))}
     </Panel>
   );
@@ -211,20 +217,22 @@ function EventStream({ initialEvent, initialActor, observed }: { initialEvent?: 
       {loading && <Loading />}
       {error && <ErrorNote>{error}</ErrorNote>}
       {data && (rows.length === 0 ? <EmptyState headline="No events" lead={hasFilters || q ? 'nothing matches these filters' : 'nothing yet'} /> : (
-        <Table>
-          <TableHeader><TableRow><TableHead>Event</TableHead><TableHead>Actor</TableHead><TableHead>Properties</TableHead><TableHead>When</TableHead><TableHead /></TableRow></TableHeader>
-          <TableBody>
-            {rows.map((e, i) => (
-              <TableRow key={i}>
-                <TableCell className="font-medium">{e.event}</TableCell>
-                <TableCell><Link to={`/data/person/${encodeURIComponent(e.distinct_id)}`} className="text-xs font-mono text-primary hover:underline">{e.distinct_id}</Link></TableCell>
-                <TableCell className="text-xs text-muted-foreground max-w-sm truncate" title={JSON.stringify(e.properties)}>{JSON.stringify(e.properties)}</TableCell>
-                <TableCell className="text-xs text-muted-foreground">{new Date(e.timestamp).toLocaleString()}</TableCell>
-                <TableCell><RegBadge registered={e.registered} /></TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader><TableRow><TableHead>Event</TableHead><TableHead>Actor</TableHead><TableHead>Properties</TableHead><TableHead>When</TableHead><TableHead /></TableRow></TableHeader>
+            <TableBody>
+              {rows.map((e, i) => (
+                <TableRow key={i}>
+                  <TableCell className="font-medium">{e.event}</TableCell>
+                  <TableCell><Link to={`/data/person/${encodeURIComponent(e.distinct_id)}`} className="text-xs font-mono text-primary hover:underline">{e.distinct_id}</Link></TableCell>
+                  <TableCell className="text-xs text-muted-foreground max-w-sm truncate" title={JSON.stringify(e.properties)}>{JSON.stringify(e.properties)}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{new Date(e.timestamp).toLocaleString()}</TableCell>
+                  <TableCell><RegBadge registered={e.registered} /></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       ))}
     </Panel>
   );
@@ -275,20 +283,22 @@ function Warnings() {
       {loading && <Loading />}
       {error && <ErrorNote>{error}</ErrorNote>}
       {data && (data.length === 0 ? <EmptyState headline="Clean" lead="no ingest warnings — every event was processed cleanly" /> : (
-        <Table>
-          <TableHeader><TableRow><TableHead>Kind</TableHead><TableHead>Event</TableHead><TableHead>Detail</TableHead><TableHead className="text-right">Count</TableHead><TableHead>Last seen</TableHead></TableRow></TableHeader>
-          <TableBody>
-            {data.map((w, i) => (
-              <TableRow key={i}>
-                <TableCell><Badge variant={w.kind === 'rejected' ? 'destructive' : 'secondary'}>{WARN_LABEL[w.kind]}</Badge></TableCell>
-                <TableCell className="font-medium">{w.event}</TableCell>
-                <TableCell className="text-xs text-muted-foreground max-w-md truncate" title={w.detail}>{w.detail}</TableCell>
-                <TableCell className="text-right tabular-nums">{w.count}</TableCell>
-                <TableCell className="text-xs text-muted-foreground">{new Date(w.last_seen).toLocaleString()}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader><TableRow><TableHead>Kind</TableHead><TableHead>Event</TableHead><TableHead>Detail</TableHead><TableHead className="text-right">Count</TableHead><TableHead>Last seen</TableHead></TableRow></TableHeader>
+            <TableBody>
+              {data.map((w, i) => (
+                <TableRow key={i}>
+                  <TableCell><Badge variant={w.kind === 'rejected' ? 'destructive' : 'secondary'}>{WARN_LABEL[w.kind]}</Badge></TableCell>
+                  <TableCell className="font-medium">{w.event}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground max-w-md truncate" title={w.detail}>{w.detail}</TableCell>
+                  <TableCell className="text-right tabular-nums">{w.count}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{new Date(w.last_seen).toLocaleString()}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       ))}
     </Panel>
   );
@@ -315,22 +325,24 @@ function Entities({ types }: { types: string[] }) {
       {loading && <Loading />}
       {error && <ErrorNote>{error}</ErrorNote>}
       {data && (rows.length === 0 ? <EmptyState headline="No entities" lead="none of this type yet" /> : (
-        <Table>
-          <TableHeader><TableRow><TableHead>ID</TableHead>{propKeys.map((k) => <TableHead key={k}>{k}</TableHead>)}<TableHead>Updated</TableHead></TableRow></TableHeader>
-          <TableBody>
-            {rows.map((e) => (
-              <TableRow key={e.entity_id}>
-                <TableCell className="font-medium">
-                  {identity
-                    ? <Link to={`/data/person/${encodeURIComponent(e.entity_id)}`} className="text-primary hover:underline">{e.entity_id}</Link>
-                    : e.entity_id}
-                </TableCell>
-                {propKeys.map((k) => <TableCell key={k} className="text-xs text-muted-foreground">{fmtVal(e.properties[k])}</TableCell>)}
-                <TableCell className="text-xs text-muted-foreground">{new Date(e.updated_at).toLocaleDateString()}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader><TableRow><TableHead>ID</TableHead>{propKeys.map((k) => <TableHead key={k}>{k}</TableHead>)}<TableHead>Updated</TableHead></TableRow></TableHeader>
+            <TableBody>
+              {rows.map((e) => (
+                <TableRow key={e.entity_id}>
+                  <TableCell className="font-medium">
+                    {identity
+                      ? <Link to={`/data/person/${encodeURIComponent(e.entity_id)}`} className="text-primary hover:underline">{e.entity_id}</Link>
+                      : e.entity_id}
+                  </TableCell>
+                  {propKeys.map((k) => <TableCell key={k} className="text-xs text-muted-foreground">{fmtVal(e.properties[k])}</TableCell>)}
+                  <TableCell className="text-xs text-muted-foreground">{new Date(e.updated_at).toLocaleDateString()}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       ))}
     </Panel>
   );

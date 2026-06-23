@@ -98,11 +98,17 @@ export const updateMetricSchema = z.object({
   purpose: semanticText.optional(),
   category: metricCategorySchema.nullable().optional(),
   tags: tagsSchema.optional(),
-  status: z.enum(['proposed', 'active', 'deprecated']).optional(),
+  status: z.enum(['proposed', 'active']).optional(),
   source: z.unknown().optional(),
 });
 
 export type UpdateMetricInput = z.infer<typeof updateMetricSchema>;
+
+export const deprecateMetricSchema = z.object({
+  reason: semanticText,
+});
+
+export type DeprecateMetricInput = z.infer<typeof deprecateMetricSchema>;
 
 // ===== Entity types & funnels =====
 

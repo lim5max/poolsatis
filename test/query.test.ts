@@ -120,7 +120,14 @@ describe('funnel queries', () => {
     expect(res.status).toBe(200);
     const [s1, s2] = res.body.steps;
     expect(s1.actors).toBe(3);
+    expect(s1).toMatchObject({
+      label: 'signup',
+      metric_key: 'signup',
+      purpose: 'test metric for signup, informs nothing real',
+      category: null,
+    });
     expect(s2.actors).toBe(2); // u1 + u2 exported after signup within 7d window
+    expect(s2.metric_key).toBe('export');
     expect(s2.conversion_from_start).toBeCloseTo(2 / 3, 3);
   });
 
@@ -142,6 +149,11 @@ describe('funnel queries', () => {
     expect(s1.actors).toBe(3);
     expect(s2.actors).toBe(1); // only u1 exported within 2h; u2 took 30h
     expect(s1.label).toBe('Signup');
+    expect(s1).toMatchObject({
+      metric_key: 'signup',
+      purpose: 'test metric for signup, informs nothing real',
+      category: null,
+    });
   });
 
   it('rejects funnel and steps together', async () => {

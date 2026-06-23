@@ -5,6 +5,7 @@ import type {
   EntityStatusEvidenceQuery,
   EventStore,
   EventNameStat,
+  EventStatsQuery,
   FunnelQuery,
   IntervalActivityQuery,
   LifecyclePoint,
@@ -417,6 +418,27 @@ export class PostgresEventStore implements EventStore {
        WHERE project_id = $1 AND env = $2 AND "timestamp" >= now() - make_interval(days => $3)
        GROUP BY event ORDER BY count DESC`,
       [projectId, env, sinceDays],
+    );
+    return rows.map((r) => ({
+      event: r.event,
+      count: Number(r.count),
+      registered_share: Number(r.registered_share),
+      last_seen: toIso(r.last_seen),
+    }));
+  }
+
+  async eventStats(q: EventStatsQuery): Promise<EventNameStat[]> {
+    if (q.events.length === 0) return [];
+    const { rows } = await this.pool.query(
+      `SELECT event, count(*) AS count, avg(registered::int) AS registered_share,
+              max("timestamp") AS last_seen
+       FROM events
+       WHERE project_id = $1
+         AND env = $2
+         AND "timestamp" >= now() - make_interval(days => $3)
+         AND event = ANY($4::text[])
+       GROUP BY event ORDER BY count DESC`,
+      [q.projectId, q.env, q.sinceDays, q.events],
     );
     return rows.map((r) => ({
       event: r.event,

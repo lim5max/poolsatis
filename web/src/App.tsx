@@ -31,7 +31,7 @@ export function App() {
   const { token } = useStore();
   if (!token) return <Connect />;
   return (
-    <div className="grid grid-cols-[232px_1fr] h-screen">
+    <div className="grid min-h-screen grid-cols-1 md:grid-cols-[232px_1fr] md:h-screen">
       <Sidebar />
       <Main />
     </div>
@@ -41,14 +41,14 @@ export function App() {
 function Sidebar() {
   const { client, disconnect, tokenKind } = useStore();
   return (
-    <aside className="flex flex-col bg-sidebar border-r py-5">
-      <div className="px-5 pb-5">
+    <aside className="flex flex-col bg-sidebar border-b py-4 md:border-b-0 md:border-r md:py-5">
+      <div className="px-5 pb-4 md:pb-5">
         <div className="serif text-2xl flex items-center gap-2.5">
           <img className="size-8" src="/poolstatis-logo.svg" alt="" /> Poolstatis
         </div>
         <div className="text-xs text-muted-foreground mt-1">Headless analytics admin</div>
       </div>
-      <nav className="flex-1 px-3">
+      <nav className="px-3 md:flex-1">
         {NAV_GROUPS.map((g) => (
           <div key={g.label} className="mb-1">
             <div className="px-3 pt-3.5 pb-1.5 text-xs font-medium text-muted-foreground/70">{g.label}</div>
@@ -79,16 +79,19 @@ function Main() {
   const showProject = isProjectScoped(loc.pathname);
 
   return (
-    <div className="overflow-y-auto h-screen">
-      <div className="sticky top-0 z-10 flex items-center h-14 px-8 border-b bg-background/85 backdrop-blur-md">
-        <div className="flex items-center gap-2 text-sm">
+    <div className="min-h-0 md:h-screen md:overflow-y-auto">
+      <div className="sticky top-0 z-10 flex min-h-14 items-center px-4 py-3 border-b bg-background/85 backdrop-blur-md md:px-8">
+        <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
           <span className="text-muted-foreground">Poolstatis</span>
           {showProject && project && (
             <>
               <span className="text-muted-foreground/50">/</span>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="h-7 gap-1.5">{project}<ChevronsUpDown className="size-3" /></Button>
+                  <Button variant="outline" size="sm" className="h-7 max-w-full gap-1.5">
+                    <span className="max-w-40 truncate md:max-w-none">{project}</span>
+                    <ChevronsUpDown className="size-3 shrink-0" />
+                  </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start">
                   {projects.map((p) => (
@@ -102,7 +105,7 @@ function Main() {
           <span className="text-foreground">{title}</span>
         </div>
       </div>
-      <motion.div className="p-8 pb-20 max-w-6xl" key={loc.pathname}
+      <motion.div className="max-w-6xl p-4 pb-20 md:p-8" key={loc.pathname}
         initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.26, ease: 'easeOut' }}>
         <Routes>
           <Route path="/" element={<Projects />} />

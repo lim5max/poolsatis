@@ -10,16 +10,18 @@ import {
 } from '../services/projects.js';
 import { INSTRUMENTATION_STANDARD } from '../mcp/standard.js';
 import {
-  defineFunnel, deleteFunnel, deleteMetric, listFunnels, listMetrics,
+  defineFunnel, deleteFunnel, deleteMetric, deprecateMetric, listFunnels, listMetrics,
   registerEntityType, registerMetric, updateMetric,
 } from '../services/registry.js';
 import { deleteEntities, getIdentityEntity, upsertEntities } from '../services/entities.js';
 import { createInsight, listInsights, setInsightStatus } from '../services/insights.js';
 import { clearIngestWarnings, listIngestWarnings, type WarningKind } from '../services/warnings.js';
 import { listDataQualityIssues } from '../services/dataQuality.js';
+import { explainMetricUsage } from '../services/metricUsage.js';
 import { getProjectSchema } from '../services/schema.js';
 import { parseDateInput } from '../dates.js';
 import {
+  deprecateMetricSchema,
   defineFunnelSchema, entityUpsertSchema, ingestEnvelopeSchema, propertyFilterSchema, purgeDataSchema,
   querySchema, registerEntityTypeSchema, registerMetricSchema, updateMetricSchema, type PropertyFilter,
 } from '../schemas.js';
@@ -67,7 +69,7 @@ export function buildServer(pool: pg.Pool): FastifyInstance {
   // is safe here. Preflight OPTIONS is exempted from the auth hook below.
   void app.register(import('@fastify/cors'), {
     origin: true,
-    methods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['authorization', 'content-type'],
   });
 
@@ -251,10 +253,42 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     platform(req);
     const project = await resolveProject(req);
     const { key } = req.params as { key: string };
+    if ((req.body as { status?: unknown } | null)?.status === 'deprecated') {
+      throw badRequest(
+        'use_deprecate_metric',
+        'deprecated metrics must include a retirement reason',
+        'call deprecate_metric or POST /metrics/{key}/deprecate with a reason so future agents understand why it was retired',
+      );
+    }
     const patch = updateMetricSchema.parse(req.body);
     const metric = await updateMetric(ctx.pool, project.id, key, patch);
     ctx.ingest.invalidateRegistry(project.id);
     return metric;
+  });
+
+  app.post('/api/v1/projects/:slug/metrics/:key/deprecate', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    const input = deprecateMetricSchema.parse(req.body);
+    const metric = await deprecateMetric(ctx.pool, project.id, key, input);
+    ctx.ingest.invalidateRegistry(project.id);
+    return metric;
+  });
+
+  app.get('/api/v1/projects/:slug/metrics/:key/usage', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    const { env, since_days } = req.query as { env?: string; since_days?: string };
+    return explainMetricUsage(
+      ctx.pool,
+      ctx.eventStore,
+      project.id,
+      key,
+      env ?? 'prod',
+      parseBoundedInt(since_days, 30, 1, 365, 'since_days'),
+    );
   });
 
   app.get('/api/v1/projects/:slug/metrics', async (req) => {
