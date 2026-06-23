@@ -105,6 +105,7 @@ CREATE TABLE metrics (
   purpose     text NOT NULL,        -- ЗАЧЕМ собирается — обязательное, непустое
   category    text CHECK (category IN
                 ('acquisition','activation','retention','revenue','referral','quality')),
+  tags        text[] NOT NULL DEFAULT '{}',  -- free-form open facet (feature, north-star, …)
   type        text NOT NULL CHECK (type IN
                 ('count',          -- сколько раз произошло событие
                  'unique_actors',  -- сколько уникальных distinct_id
@@ -176,4 +177,4 @@ CREATE TABLE insights (
 );
 ```
 
-`manual` — сохранённые запросы/заметки через MCP; `auto` — продукция Insights Worker (этап 2). Дашборд в Poolsatis — это не отдельная сущность, а набор сохранённых запросов: агент пользователя строит дашборды на своей стороне из Query DSL, платформа хранит только определения.
+`manual` — сохранённые запросы/заметки через MCP; `auto` — продукция Insights Worker (этап 2). Дашборд в Poolstatis — это не отдельная сущность, а набор сохранённых запросов: агент пользователя строит дашборды на своей стороне из Query DSL, платформа хранит только определения.

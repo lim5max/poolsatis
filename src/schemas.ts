@@ -65,12 +65,16 @@ export const metricSourceSchemas = {
 
 export type MetricType = keyof typeof metricSourceSchemas;
 
+// Free-form labels beyond the AARRR category (e.g. 'product', 'north-star').
+const tagsSchema = z.array(z.string().trim().min(1).max(40)).max(20);
+
 export const registerMetricSchema = z
   .object({
     key: keySchema,
     name: z.string().trim().min(1),
     purpose: semanticText,
     category: metricCategorySchema.optional(),
+    tags: tagsSchema.optional(),
     type: z.enum(['count', 'unique_actors', 'value', 'conversion', 'state']),
     source: z.unknown(),
   })
@@ -93,6 +97,7 @@ export const updateMetricSchema = z.object({
   name: z.string().trim().min(1).optional(),
   purpose: semanticText.optional(),
   category: metricCategorySchema.nullable().optional(),
+  tags: tagsSchema.optional(),
   status: z.enum(['proposed', 'active', 'deprecated']).optional(),
   source: z.unknown().optional(),
 });
@@ -188,13 +193,64 @@ export const entitiesQuerySchema = z.object({
   env: z.string().default('prod'),
 });
 
+// Retention: of the actors who did `start_metric` in a cohort bucket, how many
+// came back and did `return_metric` in each later bucket. Both reference
+// event-based registry metrics; the actor is distinct_id (the standard mandates
+// a stable id, so distinct_id IS the actor until identity-merge lands).
+export const retentionQuerySchema = z.object({
+  kind: z.literal('retention'),
+  start_metric: keySchema,
+  return_metric: keySchema.optional(), // defaults to start_metric (classic retention)
+  date_from: dateStr,
+  date_to: dateStr.nullable().optional(),
+  interval: z.enum(['day', 'week', 'month']).default('week'),
+  periods: z.number().int().min(2).max(31).default(8),
+  env: z.string().default('prod'),
+});
+
+// Lifecycle: per interval, split active actors into new / returning /
+// resurrecting, plus the dormant who went quiet, for one event-based metric.
+export const lifecycleQuerySchema = z.object({
+  kind: z.literal('lifecycle'),
+  metric: keySchema,
+  date_from: dateStr,
+  date_to: dateStr.nullable().optional(),
+  interval: z.enum(['day', 'week', 'month']).default('week'),
+  env: z.string().default('prod'),
+});
+
+// Stickiness: histogram of how many distinct intervals each actor was active in.
+export const stickinessQuerySchema = z.object({
+  kind: z.literal('stickiness'),
+  metric: keySchema,
+  date_from: dateStr,
+  date_to: dateStr.nullable().optional(),
+  interval: z.enum(['day', 'week', 'month']).default('week'),
+  env: z.string().default('prod'),
+});
+
+export const purgeDataSchema = z.object({
+  env: z.string().min(1),
+  scope: z.enum(['events', 'entities', 'all']),
+  confirm_slug: z.string().min(1),
+  distinct_id: z.string().min(1).max(200).optional(),
+});
+
+export type PurgeDataInput = z.infer<typeof purgeDataSchema>;
+
 export const querySchema = z.discriminatedUnion('kind', [
   trendQuerySchema,
   funnelQuerySchema,
   entitiesQuerySchema,
+  retentionQuerySchema,
+  lifecycleQuerySchema,
+  stickinessQuerySchema,
 ]);
 
 export type TrendQueryInput = z.infer<typeof trendQuerySchema>;
 export type FunnelQueryInput = z.infer<typeof funnelQuerySchema>;
 export type EntitiesQueryInput = z.infer<typeof entitiesQuerySchema>;
+export type RetentionQueryInput = z.infer<typeof retentionQuerySchema>;
+export type LifecycleQueryInput = z.infer<typeof lifecycleQuerySchema>;
+export type StickinessQueryInput = z.infer<typeof stickinessQuerySchema>;
 export type QueryInput = z.infer<typeof querySchema>;

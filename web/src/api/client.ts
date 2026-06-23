@@ -1,0 +1,146 @@
+import type {
+  ApiKeyRow, DataQualityResponse, EntityRow, Funnel, IngestWarning, Metric, MetricStatus,
+  PersonSummary, ProjectSchema, ProjectWithStats, SampleEvent, SampleFilter,
+} from './types';
+
+export class ApiError extends Error {
+  constructor(public code: string, message: string, public hint?: string, public status?: number) {
+    super(message);
+  }
+}
+
+/** Thin typed wrapper over the Platform REST API (the admin console talks only to this). */
+export class PoolstatisClient {
+  constructor(private baseUrl: string, private token: string) {}
+
+  private async req<T>(method: string, path: string, body?: unknown): Promise<T> {
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}${path}`, {
+        method,
+        headers: {
+          authorization: `Bearer ${this.token}`,
+          ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+        },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      });
+    } catch {
+      throw new ApiError('network', `cannot reach ${this.baseUrl || 'the server'} — is it running?`);
+    }
+    const json = await res.json().catch(() => null);
+    if (!res.ok) {
+      const e = (json as { error?: { code: string; message: string; hint?: string } } | null)?.error;
+      throw new ApiError(e?.code ?? String(res.status), e?.message ?? 'request failed', e?.hint, res.status);
+    }
+    return json as T;
+  }
+
+  // ---- projects ----
+  listProjects() {
+    return this.req<{ projects: ProjectWithStats[]; scope: 'org' | 'project' }>('GET', '/api/v1/projects');
+  }
+
+  createProject(body: { slug: string; name: string }) {
+    return this.req<ProjectWithStats>('POST', '/api/v1/projects', body);
+  }
+
+  schema(slug: string, env = 'prod') {
+    return this.req<ProjectSchema>('GET', `/api/v1/projects/${slug}/schema?env=${encodeURIComponent(env)}`);
+  }
+
+  // ---- registry ----
+  metrics(slug: string, filter: { status?: MetricStatus; category?: string } = {}) {
+    const qs = new URLSearchParams();
+    if (filter.status) qs.set('status', filter.status);
+    if (filter.category) qs.set('category', filter.category);
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return this.req<{ metrics: Metric[] }>('GET', `/api/v1/projects/${slug}/metrics${suffix}`).then((r) => r.metrics);
+  }
+
+  setMetricStatus(slug: string, key: string, status: MetricStatus) {
+    return this.req<Metric>('PATCH', `/api/v1/projects/${slug}/metrics/${key}`, { status });
+  }
+
+  setMetricTags(slug: string, key: string, tags: string[]) {
+    return this.req<Metric>('PATCH', `/api/v1/projects/${slug}/metrics/${key}`, { tags });
+  }
+
+  deleteMetric(slug: string, key: string) {
+    return this.req<{ deleted: boolean }>('DELETE', `/api/v1/projects/${slug}/metrics/${key}`);
+  }
+
+  purgeData(slug: string, body: { env: string; scope: 'events' | 'entities' | 'all'; confirm_slug: string; distinct_id?: string }) {
+    return this.req<{ events_deleted: number; entities_deleted: number; env: string }>('POST', `/api/v1/projects/${slug}/data/purge`, body);
+  }
+
+  funnels(slug: string) {
+    return this.req<{ funnels: Funnel[] }>('GET', `/api/v1/projects/${slug}/funnels`).then((r) => r.funnels);
+  }
+
+  // ---- data inspection ----
+  sample(slug: string, q: {
+    event?: string; registered?: boolean; limit?: number; env: string; distinct_id?: string;
+    from?: string; to?: string; filters?: SampleFilter[];
+  }) {
+    const qs = new URLSearchParams({ env: q.env, limit: String(q.limit ?? 25) });
+    if (q.event) qs.set('event', q.event);
+    if (q.registered !== undefined) qs.set('registered', String(q.registered));
+    if (q.distinct_id) qs.set('distinct_id', q.distinct_id);
+    if (q.from) qs.set('from', q.from);
+    if (q.to) qs.set('to', q.to);
+    for (const f of q.filters ?? []) {
+      const v = f.op === 'is_set' || f.op === 'is_not_set' ? '' : Array.isArray(f.value) ? f.value.join(',') : String(f.value ?? '');
+      qs.append('prop', `${f.property}:${f.op}:${v}`);
+    }
+    return this.req<{ events: SampleEvent[] }>('GET', `/api/v1/projects/${slug}/events/sample?${qs}`).then((r) => r.events);
+  }
+
+  personSummary(slug: string, distinctId: string, env = 'prod') {
+    return this.req<PersonSummary>('GET', `/api/v1/projects/${slug}/persons/${encodeURIComponent(distinctId)}?env=${encodeURIComponent(env)}`);
+  }
+
+  entities(slug: string, q: { entity_type: string; limit?: number; env: string }) {
+    return this.req<{ entities: EntityRow[] }>('POST', `/api/v1/projects/${slug}/query`, {
+      kind: 'entities', entity_type: q.entity_type, limit: q.limit ?? 50, env: q.env,
+    }).then((r) => r.entities);
+  }
+
+  dataQuality(slug: string, q: { env: string; limit?: number; sinceDays?: number }) {
+    const qs = new URLSearchParams({ env: q.env });
+    if (q.limit !== undefined) qs.set('limit', String(q.limit));
+    if (q.sinceDays !== undefined) qs.set('since_days', String(q.sinceDays));
+    return this.req<DataQualityResponse>('GET', `/api/v1/projects/${slug}/data-quality?${qs}`);
+  }
+
+  // ---- keys (admin) ----
+  keys(slug: string) {
+    return this.req<{ keys: ApiKeyRow[] }>('GET', `/api/v1/projects/${slug}/keys`).then((r) => r.keys);
+  }
+
+  issueKey(slug: string, body: { kind: 'ingest' | 'secret'; env?: string; label?: string }) {
+    return this.req<{ id: string; token: string }>('POST', `/api/v1/projects/${slug}/keys`, body);
+  }
+
+  revokeKey(slug: string, id: string) {
+    return this.req<{ revoked: boolean }>('POST', `/api/v1/projects/${slug}/keys/${id}/revoke`);
+  }
+
+  // ---- ingest warnings (error log) ----
+  ingestWarnings(slug: string, q: { env?: string; kind?: string } = {}) {
+    const qs = new URLSearchParams();
+    if (q.env) qs.set('env', q.env);
+    if (q.kind) qs.set('kind', q.kind);
+    const suffix = qs.toString() ? `?${qs}` : '';
+    return this.req<{ warnings: IngestWarning[] }>('GET', `/api/v1/projects/${slug}/ingest-warnings${suffix}`).then((r) => r.warnings);
+  }
+
+  clearIngestWarnings(slug: string, env?: string) {
+    const suffix = env ? `?env=${encodeURIComponent(env)}` : '';
+    return this.req<{ cleared: number }>('DELETE', `/api/v1/projects/${slug}/ingest-warnings${suffix}`);
+  }
+
+  // ---- docs ----
+  standard() {
+    return this.req<{ markdown: string }>('GET', '/api/v1/standard').then((r) => r.markdown);
+  }
+}

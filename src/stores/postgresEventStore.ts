@@ -1,15 +1,23 @@
 import type pg from 'pg';
 import type {
+  ActorSummary,
+  EntityStatusEvidence,
+  EntityStatusEvidenceQuery,
   EventStore,
   EventNameStat,
   FunnelQuery,
+  IntervalActivityQuery,
+  LifecyclePoint,
   RawEvent,
+  RetentionCohort,
+  RetentionQuery,
   SampleQuery,
+  StickinessBin,
   StorableEvent,
   TrendPoint,
   TrendQuery,
 } from './eventStore.js';
-import { compileFilters, numericPropSql } from './filters.js';
+import { andFilters, compileFilters, numericPropSql } from './filters.js';
 
 export class PostgresEventStore implements EventStore {
   private readonly knownPartitions = new Set<string>();
@@ -149,6 +157,178 @@ export class PostgresEventStore implements EventStore {
     return q.steps.map((_, i) => Number(rows[0][`c${i}`]));
   }
 
+  /**
+   * `active` CTE body: distinct (actor, interval-bucket) pairs for one event.
+   * Shared by lifecycle and stickiness. Assumes params already hold
+   * [projectId, env, from, to] at $1..$4; appends the event + filter params.
+   */
+  private activeBucketsBody(q: IntervalActivityQuery, params: unknown[]): string {
+    params.push(q.event);
+    const eventParam = params.length;
+    const filters = andFilters(q.filters, 'properties', params);
+    return `SELECT DISTINCT distinct_id, date_trunc('${q.interval}', "timestamp") AS b
+            FROM events
+            WHERE project_id = $1 AND env = $2 AND event = $${eventParam}
+              AND "timestamp" >= $3 AND "timestamp" < $4${filters}`;
+  }
+
+  async retention(q: RetentionQuery): Promise<RetentionCohort[]> {
+    const iv = q.interval; // safe enum: 'day' | 'week' | 'month'
+    const params: unknown[] = [q.projectId, q.env, q.from, q.to];
+    const startFilters = andFilters(q.startFilters, 'properties', params);
+    params.push(q.startEvent);
+    const startEventParam = params.length;
+    const returnFilters = andFilters(q.returnFilters, 'properties', params);
+    params.push(q.returnEvent);
+    const returnEventParam = params.length;
+    params.push(q.periods);
+    const periodsParam = params.length;
+
+    // period index from cohort bucket to a return bucket, per interval unit
+    const periodExpr =
+      iv === 'day'
+        ? `(r.rbucket::date - s.cohort::date)`
+        : iv === 'week'
+          ? `((r.rbucket::date - s.cohort::date) / 7)`
+          : `((extract(year FROM r.rbucket)::int - extract(year FROM s.cohort)::int) * 12
+              + (extract(month FROM r.rbucket)::int - extract(month FROM s.cohort)::int))`;
+
+    const sql = `
+      WITH starts AS (
+        SELECT distinct_id, min(date_trunc('${iv}', "timestamp")) AS cohort
+        FROM events
+        WHERE project_id = $1 AND env = $2 AND event = $${startEventParam}
+          AND "timestamp" >= $3 AND "timestamp" < $4${startFilters}
+        GROUP BY distinct_id
+      ),
+      sizes AS (SELECT cohort, count(*)::int AS size FROM starts GROUP BY cohort),
+      returns AS (
+        SELECT DISTINCT distinct_id, date_trunc('${iv}', "timestamp") AS rbucket
+        FROM events
+        WHERE project_id = $1 AND env = $2 AND event = $${returnEventParam}
+          AND "timestamp" >= $3 AND "timestamp" < $4${returnFilters}
+      ),
+      grid AS (
+        SELECT s.cohort, ${periodExpr} AS period, count(DISTINCT s.distinct_id)::int AS retained
+        FROM starts s
+        JOIN returns r ON r.distinct_id = s.distinct_id AND r.rbucket >= s.cohort
+        GROUP BY s.cohort, period
+      )
+      SELECT sizes.cohort, sizes.size, grid.period, grid.retained
+      FROM sizes
+      LEFT JOIN grid ON grid.cohort = sizes.cohort AND grid.period BETWEEN 0 AND $${periodsParam} - 1
+      ORDER BY sizes.cohort, grid.period`;
+
+    const { rows } = await this.pool.query(sql, params);
+    const byCohort = new Map<string, RetentionCohort>();
+    for (const r of rows) {
+      const cohort = toIso(r.cohort);
+      let entry = byCohort.get(cohort);
+      if (!entry) {
+        entry = {
+          cohort,
+          size: Number(r.size),
+          retained: new Array(q.periods).fill(0),
+          mature_periods: maturePeriods(cohort, q.interval, q.periods, q.to),
+        };
+        byCohort.set(cohort, entry);
+      }
+      if (r.period !== null && r.period >= 0 && r.period < q.periods) {
+        entry.retained[Number(r.period)] = Number(r.retained);
+      }
+    }
+    return [...byCohort.values()];
+  }
+
+  async lifecycle(q: IntervalActivityQuery): Promise<LifecyclePoint[]> {
+    const iv = q.interval;
+    const step = `interval '1 ${iv}'`;
+    const params: unknown[] = [q.projectId, q.env, q.from, q.to];
+
+    // active = distinct (actor, bucket); classify each active bucket by its
+    // relation to the actor's previous active bucket; dormant = the bucket
+    // right after an active one where the actor did NOT return.
+    const sql = `
+      WITH active AS (${this.activeBucketsBody(q, params)}),
+      seq AS (
+        SELECT distinct_id, b,
+               lag(b) OVER (PARTITION BY distinct_id ORDER BY b) AS prev_b,
+               min(b) OVER (PARTITION BY distinct_id) AS first_b
+        FROM active
+      ),
+      classified AS (
+        SELECT b AS bucket,
+          CASE
+            WHEN b = first_b THEN 'new'
+            WHEN prev_b = b - ${step} THEN 'returning'
+            ELSE 'resurrecting'
+          END AS cls
+        FROM seq
+      ),
+      dormant AS (
+        -- Only count an actor dormant in an interval that has fully elapsed by the to bound.
+        -- The current (partial) interval is excluded, or every actor active last
+        -- interval looks churned merely because this interval hasn't finished.
+        SELECT (a.b + ${step}) AS bucket
+        FROM active a
+        WHERE NOT EXISTS (
+          SELECT 1 FROM active a2 WHERE a2.distinct_id = a.distinct_id AND a2.b = a.b + ${step}
+        ) AND (a.b + ${step}) < date_trunc('${iv}', $4::timestamptz)
+      ),
+      live AS (
+        SELECT bucket,
+          count(*) FILTER (WHERE cls = 'new')::int AS n_new,
+          count(*) FILTER (WHERE cls = 'returning')::int AS n_returning,
+          count(*) FILTER (WHERE cls = 'resurrecting')::int AS n_resurrecting
+        FROM classified GROUP BY bucket
+      ),
+      dead AS (SELECT bucket, count(*)::int AS n_dormant FROM dormant GROUP BY bucket)
+      SELECT b.bucket,
+             COALESCE(live.n_new, 0) AS n_new,
+             COALESCE(live.n_returning, 0) AS n_returning,
+             COALESCE(live.n_resurrecting, 0) AS n_resurrecting,
+             COALESCE(dead.n_dormant, 0) AS n_dormant
+      FROM (SELECT bucket FROM live UNION SELECT bucket FROM dead) b
+      LEFT JOIN live ON live.bucket = b.bucket
+      LEFT JOIN dead ON dead.bucket = b.bucket
+      ORDER BY b.bucket`;
+
+    const { rows } = await this.pool.query(sql, params);
+    return rows.map((r) => ({
+      bucket: toIso(r.bucket),
+      new: Number(r.n_new),
+      returning: Number(r.n_returning),
+      resurrecting: Number(r.n_resurrecting),
+      dormant: -Number(r.n_dormant),
+    }));
+  }
+
+  async stickiness(q: IntervalActivityQuery): Promise<StickinessBin[]> {
+    const params: unknown[] = [q.projectId, q.env, q.from, q.to];
+    const sql = `
+      WITH active AS (${this.activeBucketsBody(q, params)}),
+      per AS (SELECT distinct_id, count(*)::int AS n FROM active GROUP BY distinct_id)
+      SELECT n AS intervals_active, count(*)::int AS actors
+      FROM per GROUP BY n ORDER BY n`;
+    const { rows } = await this.pool.query(sql, params);
+    return rows.map((r) => ({ intervals_active: Number(r.intervals_active), actors: Number(r.actors) }));
+  }
+
+  async purge(projectId: string, env?: string, distinctId?: string): Promise<number> {
+    const params: unknown[] = [projectId];
+    let sql = 'DELETE FROM events WHERE project_id = $1';
+    if (env !== undefined) {
+      params.push(env);
+      sql += ` AND env = $${params.length}`;
+    }
+    if (distinctId !== undefined) {
+      params.push(distinctId);
+      sql += ` AND distinct_id = $${params.length}`;
+    }
+    const { rowCount } = await this.pool.query(sql, params);
+    return rowCount ?? 0;
+  }
+
   async sample(q: SampleQuery): Promise<RawEvent[]> {
     const params: unknown[] = [q.projectId];
     const where = ['project_id = $1'];
@@ -163,6 +343,21 @@ export class PostgresEventStore implements EventStore {
     if (q.registered !== undefined) {
       params.push(q.registered);
       where.push(`registered = $${params.length}`);
+    }
+    if (q.distinct_id !== undefined) {
+      params.push(q.distinct_id);
+      where.push(`distinct_id = $${params.length}`);
+    }
+    if (q.from !== undefined) {
+      params.push(q.from);
+      where.push(`"timestamp" >= $${params.length}`);
+    }
+    if (q.to !== undefined) {
+      params.push(q.to);
+      where.push(`"timestamp" < $${params.length}`);
+    }
+    if (q.filters?.length) {
+      where.push(...compileFilters(q.filters, 'properties', params));
     }
     params.push(q.limit);
     const sql = `
@@ -181,6 +376,39 @@ export class PostgresEventStore implements EventStore {
     }));
   }
 
+  async actorSummary(projectId: string, env: string, distinctId: string): Promise<ActorSummary> {
+    const where = 'project_id = $1 AND env = $2 AND distinct_id = $3';
+    const args = [projectId, env, distinctId];
+    const [agg, top] = await Promise.all([
+      this.pool.query(
+        `SELECT min("timestamp") AS first_seen, max("timestamp") AS last_seen,
+                count(*)::int AS total_events,
+                count(DISTINCT event)::int AS distinct_events,
+                count(DISTINCT date_trunc('day', "timestamp"))::int AS active_days,
+                count(DISTINCT session_id)::int AS sessions,
+                COALESCE(avg(registered::int), 0)::float AS registered_share
+         FROM events WHERE ${where}`,
+        args,
+      ),
+      this.pool.query(
+        `SELECT event, count(*)::int AS count FROM events WHERE ${where}
+         GROUP BY event ORDER BY count DESC LIMIT 8`,
+        args,
+      ),
+    ]);
+    const r = agg.rows[0];
+    return {
+      first_seen: r.first_seen ? toIso(r.first_seen) : null,
+      last_seen: r.last_seen ? toIso(r.last_seen) : null,
+      total_events: Number(r.total_events),
+      distinct_events: Number(r.distinct_events),
+      active_days: Number(r.active_days),
+      sessions: Number(r.sessions),
+      registered_share: Number(r.registered_share),
+      top_events: top.rows.map((t) => ({ event: t.event, count: Number(t.count) })),
+    };
+  }
+
   async eventNames(projectId: string, env: string, sinceDays: number): Promise<EventNameStat[]> {
     const { rows } = await this.pool.query(
       `SELECT event, count(*) AS count, avg(registered::int) AS registered_share,
@@ -195,6 +423,67 @@ export class PostgresEventStore implements EventStore {
       count: Number(r.count),
       registered_share: Number(r.registered_share),
       last_seen: toIso(r.last_seen),
+    }));
+  }
+
+  async entityStatusEvidence(q: EntityStatusEvidenceQuery): Promise<EntityStatusEvidence[]> {
+    if (q.specs.length === 0) return [];
+    const { rows } = await this.pool.query(
+      `WITH expected AS (
+         SELECT event, entity_type, expected_status
+         FROM jsonb_to_recordset($3::jsonb)
+           AS x(event text, entity_type text, expected_status text)
+       ),
+       matched AS (
+         SELECT
+           expected.entity_type,
+           COALESCE(
+             events.properties->>'entity_id',
+             events.properties->>(expected.entity_type || '_id'),
+             events.properties->>'id'
+           ) AS entity_id,
+           events.event,
+           expected.expected_status,
+           max(events."timestamp") AS last_event_at,
+           count(*)::int AS evidence_events
+         FROM events
+         JOIN expected ON expected.event = events.event
+         WHERE events.project_id = $1
+           AND events.env = $2
+           AND events."timestamp" >= now() - make_interval(days => $4)
+         GROUP BY expected.entity_type, entity_id, events.event, expected.expected_status
+       )
+       SELECT
+         matched.entity_type,
+         matched.entity_id,
+         entities.properties->>'status' AS current_status,
+         matched.event,
+         matched.expected_status,
+         matched.last_event_at,
+         matched.evidence_events,
+         entities.updated_at AS entity_updated_at
+       FROM matched
+       JOIN entities
+         ON entities.project_id = $1
+        AND entities.env = $2
+        AND entities.entity_type = matched.entity_type
+        AND entities.entity_id = matched.entity_id
+       WHERE matched.entity_id IS NOT NULL
+         AND entities.properties->>'status' IS NOT NULL
+         AND lower(entities.properties->>'status') <> matched.expected_status
+       ORDER BY last_event_at DESC
+       LIMIT $5`,
+      [q.projectId, q.env, JSON.stringify(q.specs), q.sinceDays, q.limit],
+    );
+    return rows.map((r) => ({
+      entity_type: r.entity_type,
+      entity_id: r.entity_id,
+      current_status: r.current_status,
+      event: r.event,
+      expected_status: r.expected_status,
+      last_event_at: toIso(r.last_event_at),
+      evidence_events: Number(r.evidence_events),
+      entity_updated_at: toIso(r.entity_updated_at),
     }));
   }
 
@@ -245,4 +534,25 @@ function isPartitionOverlapError(err: unknown): boolean {
 
 function toIso(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+/**
+ * How many leading retention periods have fully elapsed for a cohort by `to`.
+ * Period p observes the window [cohort + p·interval, cohort + (p+1)·interval); it
+ * is mature only once that window has fully passed. Periods past this are
+ * right-censored (their 0s mean "not yet", not "churned").
+ */
+function maturePeriods(
+  cohortIso: string,
+  interval: 'day' | 'week' | 'month',
+  periods: number,
+  to: Date,
+): number {
+  for (let p = 0; p < periods; p++) {
+    const end = new Date(cohortIso);
+    if (interval === 'month') end.setUTCMonth(end.getUTCMonth() + (p + 1));
+    else end.setUTCDate(end.getUTCDate() + (interval === 'week' ? 7 : 1) * (p + 1));
+    if (end.getTime() > to.getTime()) return p;
+  }
+  return periods;
 }

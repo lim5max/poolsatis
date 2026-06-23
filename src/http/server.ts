@@ -4,16 +4,24 @@ import type pg from 'pg';
 import { ApiError, badRequest, notFound } from '../errors.js';
 import { authenticate, requireKind, type AuthContext } from './auth.js';
 import { createContext, type AppContext } from './context.js';
-import { getProjectBySlug, listProjects, type Project } from '../services/projects.js';
 import {
-  defineFunnel, listFunnels, listMetrics, registerEntityType, registerMetric, updateMetric,
+  createApiKey, createProject, getProjectBySlug, listApiKeys,
+  listProjectsWithStats, revokeApiKey, type Project,
+} from '../services/projects.js';
+import { INSTRUMENTATION_STANDARD } from '../mcp/standard.js';
+import {
+  defineFunnel, deleteFunnel, deleteMetric, listFunnels, listMetrics,
+  registerEntityType, registerMetric, updateMetric,
 } from '../services/registry.js';
-import { upsertEntities } from '../services/entities.js';
+import { deleteEntities, getIdentityEntity, upsertEntities } from '../services/entities.js';
 import { createInsight, listInsights, setInsightStatus } from '../services/insights.js';
+import { clearIngestWarnings, listIngestWarnings, type WarningKind } from '../services/warnings.js';
+import { listDataQualityIssues } from '../services/dataQuality.js';
 import { getProjectSchema } from '../services/schema.js';
+import { parseDateInput } from '../dates.js';
 import {
-  defineFunnelSchema, entityUpsertSchema, ingestEnvelopeSchema, querySchema,
-  registerEntityTypeSchema, registerMetricSchema, updateMetricSchema,
+  defineFunnelSchema, entityUpsertSchema, ingestEnvelopeSchema, propertyFilterSchema, purgeDataSchema,
+  querySchema, registerEntityTypeSchema, registerMetricSchema, updateMetricSchema, type PropertyFilter,
 } from '../schemas.js';
 
 declare module 'fastify' {
@@ -22,9 +30,50 @@ declare module 'fastify' {
   }
 }
 
+const NUMERIC_TOKEN = /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/;
+
+function parseBoundedInt(raw: string | undefined, fallback: number, min: number, max: number, name: string): number {
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < min || n > max) {
+    throw badRequest('invalid_query_param', `${name} must be an integer between ${min} and ${max}`);
+  }
+  return n;
+}
+
+/** Parse a `key:op:value` query token into a validated PropertyFilter. */
+function parsePropFilter(token: string): PropertyFilter {
+  const m = /^([^:]+):([^:]+):?([\s\S]*)$/.exec(token);
+  if (!m) throw badRequest('invalid_filter', `bad filter "${token}" — expected key:op:value`);
+  const [, property, op, rawValue] = m;
+  const base = { property: property!, op: op! };
+  if (op === 'is_set' || op === 'is_not_set') return propertyFilterSchema.parse(base) as PropertyFilter;
+  // Query-string values arrive as strings. For range ops a numeric-looking value
+  // must be coerced to a number, or compileFilters compares lexically as text
+  // ('9' > '100'). eq/ne/in stay strings so zero-padded ids and ISO dates (which
+  // already sort correctly as text) keep their exact value.
+  const numericRange =
+    (op === 'gt' || op === 'gte' || op === 'lt' || op === 'lte') && NUMERIC_TOKEN.test(rawValue ?? '');
+  const value = op === 'in' ? (rawValue ?? '').split(',') : numericRange ? Number(rawValue) : rawValue;
+  return propertyFilterSchema.parse({ ...base, value }) as PropertyFilter;
+}
+
 export function buildServer(pool: pg.Pool): FastifyInstance {
   const ctx = createContext(pool);
   const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 });
+
+  // The dashboard SPA is served from a different origin (vite dev or static
+  // host). Bearer tokens, not cookies, carry auth — so reflecting the origin
+  // is safe here. Preflight OPTIONS is exempted from the auth hook below.
+  void app.register(import('@fastify/cors'), {
+    origin: true,
+    methods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['authorization', 'content-type'],
+  });
+
+  // Unauthenticated liveness probe the dashboard uses to check the base URL
+  // before a token is entered.
+  app.get('/health', async () => ({ status: 'ok', service: 'poolstatis' }));
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ApiError) {
@@ -51,6 +100,8 @@ export function buildServer(pool: pg.Pool): FastifyInstance {
   });
 
   app.addHook('onRequest', async (req) => {
+    // CORS preflight and the public health probe carry no token.
+    if (req.method === 'OPTIONS' || req.url === '/health') return;
     req.auth = await authenticate(pool, req.headers.authorization);
   });
 
@@ -107,15 +158,77 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
 
   app.get('/api/v1/projects', async (req) => {
     platform(req);
+    const all = await listProjectsWithStats(ctx.pool, req.auth.orgId);
+    // Secret keys are pinned to one project; personal tokens see the whole org.
     if (req.auth.kind === 'secret') {
-      const { rows } = await ctx.pool.query(
-        'SELECT slug, name, timezone FROM projects WHERE id = $1',
-        [req.auth.projectId],
-      );
-      return { projects: rows };
+      const { rows } = await ctx.pool.query('SELECT slug FROM projects WHERE id = $1', [req.auth.projectId]);
+      const onlySlug = rows[0]?.slug as string | undefined;
+      return { projects: all.filter((p) => p.slug === onlySlug), scope: 'project' };
     }
-    const projects = await listProjects(ctx.pool, req.auth.orgId);
-    return { projects: projects.map(({ slug, name, timezone }) => ({ slug, name, timezone })) };
+    return { projects: all, scope: 'org' };
+  });
+
+  app.post('/api/v1/projects', async (req, reply) => {
+    platform(req);
+    const body = req.body as { slug?: string; name?: string; timezone?: string };
+    if (!body?.slug || !body?.name) {
+      throw badRequest('validation_error', 'slug and name are required');
+    }
+    if (!/^[a-z][a-z0-9-]*$/.test(body.slug)) {
+      throw badRequest('invalid_slug', 'slug must be lowercase letters, digits and hyphens, starting with a letter');
+    }
+    try {
+      const project = await createProject(ctx.pool, req.auth.orgId, body.slug, body.name);
+      // A new project has no data yet — return the same shape as the list (stats zeroed).
+      return reply.status(201).send({
+        slug: project.slug, name: project.name, timezone: project.timezone,
+        active_metrics: 0, funnels: 0, events_30d: 0,
+      });
+    } catch (err) {
+      if ((err as { code?: string }).code === '23505') {
+        throw new ApiError(409, 'slug_taken', `a project with slug "${body.slug}" already exists in this org`);
+      }
+      throw err;
+    }
+  });
+
+  // ----- API key management (admin) -----
+  app.get('/api/v1/projects/:slug/keys', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    return { keys: await listApiKeys(ctx.pool, project.id) };
+  });
+
+  app.post('/api/v1/projects/:slug/keys', async (req, reply) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const body = req.body as { kind?: string; env?: string; label?: string };
+    if (body?.kind !== 'ingest' && body?.kind !== 'secret') {
+      throw badRequest('invalid_kind', 'kind must be "ingest" or "secret"', 'personal tokens are issued via the CLI');
+    }
+    const created = await createApiKey(ctx.pool, {
+      orgId: req.auth.orgId,
+      projectId: project.id,
+      kind: body.kind,
+      ...(body.env ? { env: body.env } : {}),
+      ...(body.label ? { label: body.label } : {}),
+    });
+    // The token is returned exactly once; only its hash is stored.
+    return reply.status(201).send(created);
+  });
+
+  app.post('/api/v1/projects/:slug/keys/:id/revoke', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { id } = req.params as { id: string };
+    await revokeApiKey(ctx.pool, req.auth.orgId, id, project.id);
+    return { revoked: true };
+  });
+
+  // ----- instrumentation standard (so the admin can render setup docs) -----
+  app.get('/api/v1/standard', async (req) => {
+    platform(req);
+    return { markdown: INSTRUMENTATION_STANDARD };
   });
 
   app.get('/api/v1/projects/:slug/schema', async (req) => {
@@ -151,6 +264,15 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     return { metrics: await listMetrics(ctx.pool, project.id, { ...(status && { status }), ...(category && { category }) }) };
   });
 
+  app.delete('/api/v1/projects/:slug/metrics/:key', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    const result = await deleteMetric(ctx.pool, project.id, key);
+    ctx.ingest.invalidateRegistry(project.id);
+    return { deleted: true, ...result };
+  });
+
   app.post('/api/v1/projects/:slug/entity-types', async (req, reply) => {
     platform(req);
     const project = await resolveProject(req);
@@ -171,6 +293,41 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     return { funnels: await listFunnels(ctx.pool, project.id) };
   });
 
+  app.delete('/api/v1/projects/:slug/funnels/:key', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { key } = req.params as { key: string };
+    return { deleted: true, ...(await deleteFunnel(ctx.pool, project.id, key)) };
+  });
+
+  // Danger zone: hard-purge a project's data, scoped to one env (and optionally
+  // one actor). Irreversible. Secret-key only — keeps purge project-pinned, not
+  // available to an org-wide personal token. The caller must echo the project
+  // slug, mirroring the type-to-confirm gate in the UI.
+  app.post('/api/v1/projects/:slug/data/purge', async (req) => {
+    requireKind(req.auth, 'secret');
+    const project = await resolveProject(req);
+    const body = purgeDataSchema.parse(req.body);
+    if (body.confirm_slug !== project.slug) {
+      throw badRequest('confirmation_mismatch', 'confirm_slug must equal the project slug');
+    }
+    // distinct_id only scopes events; combining it with entities/all would
+    // silently wipe every entity in the env while only scoping events — refuse.
+    if (body.distinct_id && body.scope !== 'events') {
+      throw badRequest('invalid_scope', 'distinct_id can only be used with scope=events');
+    }
+    let events_deleted = 0;
+    let entities_deleted = 0;
+    if (body.scope === 'events' || body.scope === 'all') {
+      events_deleted = await ctx.eventStore.purge(project.id, body.env, body.distinct_id);
+    }
+    if (body.scope === 'entities' || body.scope === 'all') {
+      entities_deleted = await deleteEntities(ctx.pool, project.id, body.env);
+    }
+    ctx.ingest.invalidateRegistry(project.id);
+    return { events_deleted, entities_deleted, env: body.env };
+  });
+
   app.post('/api/v1/projects/:slug/query', async (req) => {
     platform(req);
     const project = await resolveProject(req);
@@ -181,21 +338,70 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.get('/api/v1/projects/:slug/events/sample', async (req) => {
     platform(req);
     const project = await resolveProject(req);
-    const { event, registered, limit, env } = req.query as {
-      event?: string; registered?: string; limit?: string; env?: string;
+    const { event, registered, limit, env, distinct_id, from, to } = req.query as {
+      event?: string; registered?: string; limit?: string; env?: string; distinct_id?: string; from?: string; to?: string;
     };
     const parsedLimit = limit ? Number(limit) : 20;
     if (!Number.isInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 100) {
       throw badRequest('invalid_limit', 'limit must be an integer between 1 and 100');
     }
+    // Repeatable `prop=key:op:value` → property filters, reusing the registry grammar.
+    const raw = (req.query as { prop?: string | string[] }).prop;
+    const filters = (Array.isArray(raw) ? raw : raw ? [raw] : []).map(parsePropFilter);
     const events = await ctx.eventStore.sample({
       projectId: project.id,
       limit: parsedLimit,
       ...(env !== undefined && { env }),
       ...(event !== undefined && { event }),
       ...(registered !== undefined && { registered: registered === 'true' }),
+      ...(distinct_id !== undefined && { distinct_id }),
+      ...(from !== undefined && { from: parseDateInput(from) }),
+      ...(to !== undefined && { to: parseDateInput(to) }),
+      ...(filters.length > 0 && { filters }),
     });
     return { events };
+  });
+
+  app.get('/api/v1/projects/:slug/persons/:distinctId', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { distinctId } = req.params as { distinctId: string };
+    const env = (req.query as { env?: string }).env ?? 'prod';
+    const [summary, entity] = await Promise.all([
+      ctx.eventStore.actorSummary(project.id, env, distinctId),
+      getIdentityEntity(ctx.pool, project.id, env, distinctId),
+    ]);
+    return { distinct_id: distinctId, env, summary, entity };
+  });
+
+  app.get('/api/v1/projects/:slug/ingest-warnings', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { env, kind } = req.query as { env?: string; kind?: string };
+    return { warnings: await listIngestWarnings(ctx.pool, project.id, { ...(env && { env }), ...(kind && { kind: kind as WarningKind }) }) };
+  });
+
+  app.get('/api/v1/projects/:slug/data-quality', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { env, limit, since_days } = req.query as { env?: string; limit?: string; since_days?: string };
+    return listDataQualityIssues(
+      ctx.pool,
+      ctx.eventStore,
+      project.id,
+      env ?? 'prod',
+      {
+        limit: parseBoundedInt(limit, 50, 1, 200, 'limit'),
+        sinceDays: parseBoundedInt(since_days, 30, 1, 365, 'since_days'),
+      },
+    );
+  });
+
+  app.delete('/api/v1/projects/:slug/ingest-warnings', async (req) => {
+    platform(req);
+    const project = await resolveProject(req);
+    const { env } = req.query as { env?: string };
+    return { cleared: await clearIngestWarnings(ctx.pool, project.id, env) };
   });
 
   app.get('/api/v1/projects/:slug/insights', async (req) => {

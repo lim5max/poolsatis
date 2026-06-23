@@ -85,6 +85,35 @@ export async function queryEntities(
   }));
 }
 
+/** Find the identity entity for an actor id (prefers a 'user'-typed row). */
+export async function getIdentityEntity(
+  pool: pg.Pool,
+  projectId: string,
+  env: string,
+  entityId: string,
+): Promise<{ entity_type: string; properties: Record<string, unknown>; updated_at: string } | null> {
+  const { rows } = await pool.query(
+    `SELECT entity_type, properties, updated_at FROM entities
+     WHERE project_id = $1 AND env = $2 AND entity_id = $3
+     ORDER BY (entity_type = 'user') DESC, updated_at DESC LIMIT 1`,
+    [projectId, env, entityId],
+  );
+  if (!rows[0]) return null;
+  return { entity_type: rows[0].entity_type, properties: rows[0].properties, updated_at: new Date(rows[0].updated_at).toISOString() };
+}
+
+/** Hard-delete entities for a project (optionally one env). Returns rows removed. */
+export async function deleteEntities(pool: pg.Pool, projectId: string, env?: string): Promise<number> {
+  const params: unknown[] = [projectId];
+  let sql = 'DELETE FROM entities WHERE project_id = $1';
+  if (env !== undefined) {
+    params.push(env);
+    sql += ` AND env = $${params.length}`;
+  }
+  const { rowCount } = await pool.query(sql, params);
+  return rowCount ?? 0;
+}
+
 export async function countEntities(
   pool: pg.Pool,
   projectId: string,

@@ -67,6 +67,7 @@ POST   /api/v1/projects/{slug}/funnels
 GET    /api/v1/projects/{slug}/funnels
 POST   /api/v1/projects/{slug}/query          ← единая точка Query DSL
 GET    /api/v1/projects/{slug}/events/sample
+GET    /api/v1/projects/{slug}/data-quality
 GET    /api/v1/projects/{slug}/insights
 POST   /api/v1/projects/{slug}/insights
 ```
@@ -110,6 +111,34 @@ POST   /api/v1/projects/{slug}/insights
 Ответ любого запроса включает `meta`: `{computed_at, date_range, sampling: null}` — задел под кеширование и сэмплирование без смены контракта.
 
 Принципиально: **trend и funnel принимают только ключи метрик реестра**, не сырые имена событий. Хочешь график — зарегистрируй метрику (с purpose). Это та самая воронка принуждения к семантике, на которой стоит платформа; исключение — `sample_events` для отладки.
+
+## Data quality
+
+```http
+GET /api/v1/projects/{slug}/data-quality?env=prod&limit=50&since_days=30
+```
+
+Возвращает семантические противоречия, которые видит платформа. Сейчас реализован первый диагностический класс:
+
+```jsonc
+{
+  "issues": [
+    {
+      "kind": "entity_event_status_conflict",
+      "severity": "warning",
+      "entity_type": "brief",
+      "entity_id": "bd-101",
+      "current_status": "new",
+      "expected_status": "completed",
+      "event": "brief.completed",
+      "evidence_events": 1
+    }
+  ],
+  "checked": { "terminal_event_specs": 1, "evidence_rows": 1 }
+}
+```
+
+Правило консервативное: active event-метрика вида `brief.completed` задаёт expected status `completed`, а событие должно содержать `entity_id`, `brief_id` или `id`. Если текущая entity всё ещё имеет другой `properties.status`, endpoint подсвечивает конфликт.
 
 ## Лимиты и ошибки
 

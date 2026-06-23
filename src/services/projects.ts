@@ -46,6 +46,60 @@ export async function createApiKey(
   return { id: rows[0].id, token };
 }
 
+export interface ApiKeyRow {
+  id: string;
+  kind: KeyKind;
+  env: string;
+  label: string | null;
+  created_at: string;
+  revoked_at: string | null;
+}
+
+/** Keys for a project, masked — the token itself is shown only once at creation. */
+export async function listApiKeys(pool: pg.Pool, projectId: string): Promise<ApiKeyRow[]> {
+  const { rows } = await pool.query(
+    `SELECT id, kind, env, label, created_at, revoked_at
+     FROM api_keys WHERE project_id = $1 ORDER BY created_at DESC`,
+    [projectId],
+  );
+  return rows;
+}
+
+export async function revokeApiKey(
+  pool: pg.Pool,
+  orgId: string,
+  id: string,
+  projectId: string,
+): Promise<void> {
+  // Scope to project_id as well as org_id: a secret key pinned to one project
+  // must not be able to revoke another project's key in the same org.
+  const { rowCount } = await pool.query(
+    `UPDATE api_keys SET revoked_at = now()
+     WHERE id = $1 AND org_id = $2 AND project_id = $3 AND revoked_at IS NULL`,
+    [id, orgId, projectId],
+  );
+  if (!rowCount) throw notFound('api_key', 'no active key with that id in this project');
+}
+
+export interface ProjectWithStats extends Pick<Project, 'slug' | 'name' | 'timezone'> {
+  active_metrics: number;
+  funnels: number;
+  events_30d: number;
+}
+
+export async function listProjectsWithStats(pool: pg.Pool, orgId: string): Promise<ProjectWithStats[]> {
+  const { rows } = await pool.query(
+    `SELECT p.slug, p.name, p.timezone,
+       (SELECT count(*) FROM metrics m WHERE m.project_id = p.id AND m.status = 'active')::int AS active_metrics,
+       (SELECT count(*) FROM funnels f WHERE f.project_id = p.id)::int AS funnels,
+       (SELECT count(*) FROM events e WHERE e.project_id = p.id
+          AND e."timestamp" >= now() - interval '30 days')::int AS events_30d
+     FROM projects p WHERE p.org_id = $1 ORDER BY p.created_at`,
+    [orgId],
+  );
+  return rows;
+}
+
 export async function getProjectBySlug(
   pool: pg.Pool,
   orgId: string,

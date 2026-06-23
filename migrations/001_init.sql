@@ -1,4 +1,4 @@
--- Poolsatis initial schema. Metadata plane + MVP event store (single Postgres).
+-- Poolstatis initial schema. Metadata plane + MVP event store (single Postgres).
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 

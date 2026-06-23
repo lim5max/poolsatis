@@ -1,24 +1,26 @@
 /**
- * Poolsatis MCP server: a thin wrapper over the Platform API.
+ * Poolstatis MCP server: a thin wrapper over the Platform API.
  * No business logic lives here — tools map 1:1 onto REST calls, so the same
  * server works against a local instance or a hosted one.
  *
- * Env: POOLSATIS_URL (default http://127.0.0.1:3300), POOLSATIS_TOKEN (pt_/sk_).
+ * Env: POOLSTATIS_URL (default http://127.0.0.1:3300), POOLSTATIS_TOKEN (pt_/sk_).
  */
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import {
-  defineFunnelSchema, entitiesQuerySchema, funnelQuerySchema,
-  registerEntityTypeSchema, registerMetricSchema, trendQuerySchema, updateMetricSchema,
+  defineFunnelSchema, entitiesQuerySchema, funnelQuerySchema, lifecycleQuerySchema,
+  registerEntityTypeSchema, registerMetricSchema, retentionQuerySchema, stickinessQuerySchema,
+  trendQuerySchema, updateMetricSchema,
 } from '../schemas.js';
 import { INSTRUMENTATION_STANDARD } from './standard.js';
 
-const BASE_URL = process.env.POOLSATIS_URL ?? 'http://127.0.0.1:3300';
-const TOKEN = process.env.POOLSATIS_TOKEN;
+const BASE_URL = process.env.POOLSTATIS_URL ?? 'http://127.0.0.1:3300';
+const TOKEN = process.env.POOLSTATIS_TOKEN;
 
 if (!TOKEN) {
-  console.error('POOLSATIS_TOKEN is required (a pt_ personal token or sk_ secret key)');
+  console.error('POOLSTATIS_TOKEN is required (a pt_ personal token or sk_ secret key)');
   process.exit(1);
 }
 
@@ -42,10 +44,15 @@ async function api(method: string, path: string, body?: unknown): Promise<unknow
   return json;
 }
 
-type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };
+type ToolResult = CallToolResult;
+
+const jsonOutputSchema = z.object({}).passthrough();
 
 function ok(data: unknown): ToolResult {
-  return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+  return {
+    structuredContent: asStructuredContent(data),
+    content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+  };
 }
 
 /** Errors are returned as content, not thrown: the message + hint is the agent's documentation. */
@@ -59,19 +66,39 @@ function wrap<A>(fn: (args: A) => Promise<unknown>): (args: A) => Promise<ToolRe
   };
 }
 
-const server = new McpServer({ name: 'poolsatis', version: '0.1.0' });
+const server = new McpServer({ name: 'poolstatis', version: '0.1.0' });
 const project = z.string().describe('project slug, see list_projects');
+
+function asStructuredContent(data: unknown): Record<string, unknown> {
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    return data as Record<string, unknown>;
+  }
+  return { value: data };
+}
+
+function jsonTool(
+  name: string,
+  description: string,
+  inputSchema: z.ZodRawShape,
+  handler: (args: any) => Promise<ToolResult>,
+): void {
+  server.registerTool(
+    name,
+    { description, inputSchema, outputSchema: jsonOutputSchema },
+    async (args) => handler(args),
+  );
+}
 
 // ===== Context =====
 
-server.tool(
+jsonTool(
   'list_projects',
   'List projects this token can access.',
   {},
   wrap(() => api('GET', '/api/v1/projects')),
 );
 
-server.tool(
+jsonTool(
   'get_project_schema',
   'Everything about a project in one read: registered metrics, funnels, entity types, and actual event names seen in the last 30 days with their registered share. Read this before registering anything.',
   { project, env: z.string().default('prod') },
@@ -80,21 +107,21 @@ server.tool(
 
 // ===== Registry (design-time) =====
 
-server.tool(
+jsonTool(
   'register_metric',
   'Register a metric in the project registry. `purpose` must be a real sentence — what decision does this metric inform? New metrics start as status=proposed; the project owner activates them.',
   { project, metric: registerMetricSchema },
   wrap(({ project: slug, metric }) => api('POST', `/api/v1/projects/${slug}/metrics`, metric)),
 );
 
-server.tool(
+jsonTool(
   'update_metric',
   'Update a registry metric: rename, refine purpose, change source, or move status (proposed → active → deprecated).',
   { project, key: z.string(), patch: updateMetricSchema },
   wrap(({ project: slug, key, patch }) => api('PATCH', `/api/v1/projects/${slug}/metrics/${key}`, patch)),
 );
 
-server.tool(
+jsonTool(
   'list_metrics',
   'List registry metrics, optionally filtered by status or category.',
   {
@@ -111,21 +138,35 @@ server.tool(
   }),
 );
 
-server.tool(
+jsonTool(
+  'delete_metric',
+  'Hard-delete a metric from the registry (e.g. one you registered by mistake). Refuses if a funnel references it. Prefer update_metric status=deprecated for routine retirement.',
+  { project, key: z.string() },
+  wrap(({ project: slug, key }) => api('DELETE', `/api/v1/projects/${slug}/metrics/${key}`)),
+);
+
+jsonTool(
+  'delete_funnel',
+  'Delete a funnel definition.',
+  { project, key: z.string() },
+  wrap(({ project: slug, key }) => api('DELETE', `/api/v1/projects/${slug}/funnels/${key}`)),
+);
+
+jsonTool(
   'register_entity_type',
   'Declare an entity type (user, account, …) before upserting entities of that type.',
   { project, entity_type: registerEntityTypeSchema },
   wrap(({ project: slug, entity_type }) => api('POST', `/api/v1/projects/${slug}/entity-types`, entity_type)),
 );
 
-server.tool(
+jsonTool(
   'define_funnel',
   'Define a funnel from registry metrics (not raw events). `goal` must say what the funnel is for — it feeds the insights layer.',
   { project, funnel: defineFunnelSchema },
   wrap(({ project: slug, funnel }) => api('POST', `/api/v1/projects/${slug}/funnels`, funnel)),
 );
 
-server.tool(
+jsonTool(
   'list_funnels',
   'List defined funnels with their goals and steps.',
   { project },
@@ -134,28 +175,56 @@ server.tool(
 
 // ===== Queries (analysis-time) =====
 
-server.tool(
+jsonTool(
   'query_trend',
   'Time series for a registry metric. Dates: relative ("-30d", "-12h") or ISO. Optional breakdown by an event property (top 10 + $other).',
   { project, query: trendQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'trend', ...query })),
 );
 
-server.tool(
+jsonTool(
   'query_funnel',
   'Step-by-step conversion for a saved funnel (by key) or inline steps (registry metric keys).',
   { project, query: funnelQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'funnel', ...query })),
 );
 
-server.tool(
+jsonTool(
   'query_entities',
   'Filter and sort entities by their current properties.',
   { project, query: entitiesQuerySchema.omit({ kind: true }) },
   wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'entities', ...query })),
 );
 
-server.tool(
+jsonTool(
+  'query_retention',
+  'Retention grid: of the actors who did `start_metric` in each cohort bucket, how many returned (did `return_metric`, defaults to start) in each later period. Returns cohorts with size + retained counts/percentages.',
+  { project, query: retentionQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'retention', ...query })),
+);
+
+jsonTool(
+  'query_lifecycle',
+  'Lifecycle breakdown per interval: new / returning / resurrecting / dormant actors for an event-based metric. Answers "is growth healthy underneath the headline number?".',
+  { project, query: lifecycleQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'lifecycle', ...query })),
+);
+
+jsonTool(
+  'query_stickiness',
+  'Stickiness histogram: how many distinct intervals each actor was active in over the range. High bars at the right = a habit-forming product.',
+  { project, query: stickinessQuerySchema.omit({ kind: true }) },
+  wrap(({ project: slug, query }) => api('POST', `/api/v1/projects/${slug}/query`, { kind: 'stickiness', ...query })),
+);
+
+jsonTool(
+  'get_person',
+  'Engagement summary for one actor (distinct_id): first/last seen, total/distinct events, active days, sessions, registered share, top events, plus their identity entity. Use to profile or segment a user.',
+  { project, distinct_id: z.string(), env: z.string().default('prod') },
+  wrap(({ project: slug, distinct_id, env }) => api('GET', `/api/v1/projects/${slug}/persons/${encodeURIComponent(distinct_id)}?env=${encodeURIComponent(env)}`)),
+);
+
+jsonTool(
   'sample_events',
   'Latest raw events — use to verify instrumentation works (did the event arrive? is it registered?).',
   {
@@ -173,9 +242,37 @@ server.tool(
   }),
 );
 
+jsonTool(
+  'list_ingest_warnings',
+  'Inspect events the platform accepted but could not fully process: rejected (malformed), unregistered (no active metric), clock_skew. Deduped with a count. Use to self-diagnose why data looks wrong or what happened to a deleted metric\'s events.',
+  { project, env: z.string().optional(), kind: z.enum(['rejected', 'unregistered', 'clock_skew']).optional() },
+  wrap(({ project: slug, env, kind }) => {
+    const qs = new URLSearchParams();
+    if (env) qs.set('env', env);
+    if (kind) qs.set('kind', kind);
+    const suffix = qs.size ? `?${qs}` : '';
+    return api('GET', `/api/v1/projects/${slug}/ingest-warnings${suffix}`);
+  }),
+);
+
+jsonTool(
+  'list_data_quality_issues',
+  'Find semantic contradictions in ingested data. Currently flags entities whose current status contradicts terminal registered events such as brief.completed.',
+  {
+    project,
+    env: z.string().default('prod'),
+    limit: z.number().int().min(1).max(200).default(50),
+    since_days: z.number().int().min(1).max(365).default(30),
+  },
+  wrap(({ project: slug, env, limit, since_days }) => {
+    const qs = new URLSearchParams({ env, limit: String(limit), since_days: String(since_days) });
+    return api('GET', `/api/v1/projects/${slug}/data-quality?${qs}`);
+  }),
+);
+
 // ===== Insights =====
 
-server.tool(
+jsonTool(
   'list_insights',
   'List insights (manual notes and auto findings).',
   {
@@ -192,7 +289,7 @@ server.tool(
   }),
 );
 
-server.tool(
+jsonTool(
   'create_insight',
   'Save a finding: title, markdown body, and optionally the query that reproduces it.',
   {
@@ -205,7 +302,7 @@ server.tool(
   wrap(({ project: slug, ...rest }) => api('POST', `/api/v1/projects/${slug}/insights`, rest)),
 );
 
-server.tool(
+jsonTool(
   'resolve_insight',
   'Acknowledge or resolve an insight.',
   { project, id: z.string().uuid(), status: z.enum(['ack', 'resolved']) },
@@ -216,7 +313,7 @@ server.tool(
 
 server.resource(
   'instrumentation-standard',
-  'poolsatis://standard/instrumentation',
+  'poolstatis://standard/instrumentation',
   async (uri) => ({
     contents: [{ uri: uri.href, mimeType: 'text/markdown', text: INSTRUMENTATION_STANDARD }],
   }),
@@ -224,7 +321,7 @@ server.resource(
 
 server.resource(
   'project-schema',
-  new ResourceTemplate('poolsatis://{project}/schema', { list: undefined }),
+  new ResourceTemplate('poolstatis://{project}/schema', { list: undefined }),
   async (uri, { project: slug }) => {
     const schema = await api('GET', `/api/v1/projects/${String(slug)}/schema`);
     return {

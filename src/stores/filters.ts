@@ -62,6 +62,16 @@ export function compileFilters(
   });
 }
 
+/**
+ * Compile filters and fold them into a ` AND (...)` suffix ready to append to a
+ * WHERE clause (empty string when there are no filters). Pushes values into `params`.
+ */
+export function andFilters(filters: PropertyFilter[], column: string, params: unknown[]): string {
+  return compileFilters(filters, column, params)
+    .map((c) => ` AND ${c}`)
+    .join('');
+}
+
 function pushParam(params: unknown[], value: unknown): number {
   params.push(value);
   return params.length;

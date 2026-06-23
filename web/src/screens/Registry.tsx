@@ -1,0 +1,329 @@
+import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Loader2, ChevronRight, ChevronDown } from '@/components/icons';
+import { useStore, useAsync } from '../store';
+import {
+  Loading, ErrorNote, CategoryChip, StatusBadge, TypeTag, EmptyState, Panel,
+  Toolbar, SearchInput, FilterChips, CategoryFilter, GroupBy, Overflow,
+  Confirm, DangerConfirm, NumberedStepChips, VerticalStepper, type Chip,
+} from '../components/ui';
+import { Card } from '@/components/ui/card';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { cn } from '@/lib/utils';
+import type { Funnel, Metric, MetricStatus } from '../api/types';
+
+export function Registry() {
+  const { client, project, env } = useStore();
+  const { data, error, loading, reload } = useAsync(() => client!.schema(project!, env), [project, env]);
+
+  if (loading) return <Loading what="reading registry…" />;
+  if (error) return <ErrorNote>{error}</ErrorNote>;
+  if (!data) return null;
+
+  return (
+    <Tabs defaultValue="metrics" className="gap-4">
+      <TabsList>
+        <TabsTrigger value="metrics">Metrics · {data.metrics.length}</TabsTrigger>
+        <TabsTrigger value="funnels">Funnels · {data.funnels.length}</TabsTrigger>
+        <TabsTrigger value="entities">Entity types · {data.entity_types.length}</TabsTrigger>
+      </TabsList>
+      <TabsContent value="metrics"><MetricsTable metrics={data.metrics} onChanged={reload} /></TabsContent>
+      <TabsContent value="funnels"><FunnelsTable funnels={data.funnels} /></TabsContent>
+      <TabsContent value="entities"><EntityTypesTable types={data.entity_types} /></TabsContent>
+    </Tabs>
+  );
+}
+
+type SortKey = 'name' | 'category' | 'type' | 'status';
+const STATUS_OPTS: MetricStatus[] = ['proposed', 'active', 'deprecated'];
+
+/** The primary event a metric reads from, for the "see its events" jump. */
+function metricEvent(m: Metric): string | null {
+  const s = m.source as Record<string, any>;
+  if (m.type === 'conversion') return s.from?.event ?? null;
+  if (m.type === 'state') return null;
+  return s.event ?? null;
+}
+
+function MetricsTable({ metrics, onChanged }: { metrics: Metric[]; onChanged: () => void }) {
+  const { client, project } = useStore();
+  const nav = useNavigate();
+  const openEvents = (ev: string) => nav(`/data?tab=events&event=${encodeURIComponent(ev)}`);
+  const [search, setSearch] = useState('');
+  const [cats, setCats] = useState<Set<string>>(new Set());
+  const [statuses, setStatuses] = useState<Set<string>>(new Set());
+  const [tagSel, setTagSel] = useState<Set<string>>(new Set());
+  const [groupBy, setGroupBy] = useState('none');
+  const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'name', dir: 'asc' });
+  const [busy, setBusy] = useState<string | null>(null);
+  const [deprecating, setDeprecating] = useState<Metric | null>(null);
+  const [deleting, setDeleting] = useState<Metric | null>(null);
+  const [editing, setEditing] = useState<Metric | null>(null);
+  const proposedCount = metrics.filter((m) => m.status === 'proposed').length;
+  const allTags = useMemo(() => [...new Set(metrics.flatMap((m) => m.tags ?? []))].sort(), [metrics]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const rows = metrics.filter((m) => {
+      if (q && !`${m.name} ${m.key} ${m.purpose} ${(m.tags ?? []).join(' ')}`.toLowerCase().includes(q)) return false;
+      if (cats.size && !(m.category ? cats.has(m.category) : cats.has('uncategorized'))) return false;
+      if (statuses.size && !statuses.has(m.status)) return false;
+      if (tagSel.size && !(m.tags ?? []).some((t) => tagSel.has(t))) return false;
+      return true;
+    });
+    const dir = sort.dir === 'asc' ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      const av = sort.key === 'category' ? (a.category ?? '') : a[sort.key];
+      const bv = sort.key === 'category' ? (b.category ?? '') : b[sort.key];
+      return String(av).localeCompare(String(bv)) * dir;
+    });
+  }, [metrics, search, cats, statuses, tagSel, sort]);
+
+  const groups = useMemo(() => groupRows(filtered, groupBy), [filtered, groupBy]);
+  const toggle = (set: Set<string>, setter: (s: Set<string>) => void, v: string) => { const n = new Set(set); n.has(v) ? n.delete(v) : n.add(v); setter(n); };
+  const chips: Chip[] = [
+    ...[...cats].map((c) => ({ key: `cat:${c}`, label: c })),
+    ...[...statuses].map((s) => ({ key: `st:${s}`, label: s })),
+    ...[...tagSel].map((t) => ({ key: `tag:${t}`, label: `#${t}` })),
+  ];
+  const removeChip = (k: string) => {
+    const [kind, v] = k.split(':') as [string, string];
+    if (kind === 'cat') toggle(cats, setCats, v); else if (kind === 'st') toggle(statuses, setStatuses, v); else toggle(tagSel, setTagSel, v);
+  };
+
+  const setStatus = async (key: string, status: MetricStatus) => { setBusy(key); try { await client!.setMetricStatus(project!, key, status); onChanged(); } finally { setBusy(null); } };
+  const del = async (key: string) => { setBusy(key); try { await client!.deleteMetric(project!, key); onChanged(); } finally { setBusy(null); } };
+  const saveTags = async (key: string, tags: string[]) => { setBusy(key); try { await client!.setMetricTags(project!, key, tags); onChanged(); } finally { setBusy(null); } };
+  const clickSort = (k: SortKey) => setSort((s) => ({ key: k, dir: s.key === k && s.dir === 'asc' ? 'desc' : 'asc' }));
+  const caret = (k: SortKey) => <span className={cn('ml-1 text-xs', sort.key === k ? 'text-primary' : 'text-muted-foreground/40')}>{sort.key === k && sort.dir === 'desc' ? '▾' : '▴'}</span>;
+
+  return (
+    <Card className="gap-0 py-0 overflow-hidden">
+      <div className="flex items-center px-5 py-3.5 border-b">
+        <h3 className="serif text-lg flex items-center gap-2">Metrics {proposedCount > 0 && <Badge variant="outline" className="font-sans">{proposedCount} awaiting activation</Badge>}</h3>
+      </div>
+      <Toolbar
+        left={<SearchInput value={search} onChange={setSearch} placeholder="Search name, key, purpose…" />}
+        center={<>
+          <CategoryFilter selected={cats} onToggle={(c) => toggle(cats, setCats, c)} />
+          <div className="flex h-9 rounded-md border overflow-hidden text-sm">
+            {STATUS_OPTS.map((s) => (
+              <button key={s} onClick={() => toggle(statuses, setStatuses, s)}
+                className={cn('px-3 capitalize border-r last:border-r-0 transition-colors',
+                  statuses.has(s) ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground')}>
+                {s}
+              </button>
+            ))}
+          </div>
+          {allTags.length > 0 && <TagFilter all={allTags} selected={tagSel} onToggle={(t) => toggle(tagSel, setTagSel, t)} />}
+        </>}
+        right={<><span className="text-xs text-muted-foreground tabular-nums">{filtered.length} / {metrics.length}</span><GroupBy value={groupBy} onChange={setGroupBy} /></>}
+      />
+      <FilterChips chips={chips} onRemove={removeChip} onClear={() => { setCats(new Set()); setStatuses(new Set()); setTagSel(new Set()); }} />
+      {filtered.length === 0 ? <EmptyState headline={metrics.length ? 'No matches' : 'No metrics'} lead={metrics.length ? 'no metrics match these filters' : 'register metrics via MCP or the API'} /> : (
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="cursor-pointer select-none" onClick={() => clickSort('name')}>Metric{caret('name')}</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => clickSort('category')}>Category{caret('category')}</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => clickSort('type')}>Type{caret('type')}</TableHead>
+                <TableHead>Source</TableHead><TableHead>Purpose</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => clickSort('status')}>Status{caret('status')}</TableHead>
+                <TableHead className="w-12" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {groups.map((g) => <Section key={g.label ?? '_'} group={g} busy={busy} onActivate={(k) => setStatus(k, 'active')} onDeprecate={setDeprecating} onDelete={setDeleting} onEditTags={setEditing} onOpenEvents={openEvents} />)}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+      {deprecating && (
+        <Confirm title={`Deprecate ${deprecating.name}?`} tone="warn" confirmLabel="Deprecate"
+          body="New events stop counting toward this metric; existing data and the definition are kept. You can re-activate any time."
+          onCancel={() => setDeprecating(null)} onConfirm={async () => { await setStatus(deprecating.key, 'deprecated'); setDeprecating(null); }} />
+      )}
+      {deleting && (
+        <DangerConfirm title={`Delete ${deleting.name}?`} blastRadius="Removes the metric definition permanently."
+          willDelete={['the metric definition', 'its aggregated history']} willKeep={['raw events (retained)', 'other metrics & funnels']}
+          matchValue={deleting.key} matchLabel="Type the metric key to confirm" confirmLabel="Delete metric"
+          onCancel={() => setDeleting(null)} onConfirm={async () => { await del(deleting.key); setDeleting(null); }} />
+      )}
+      {editing && (
+        <TagEditor metric={editing} suggestions={allTags}
+          onCancel={() => setEditing(null)}
+          onSave={async (tags) => { await saveTags(editing.key, tags); setEditing(null); }} />
+      )}
+    </Card>
+  );
+}
+
+function TagFilter({ all, selected, onToggle }: { all: string[]; selected: Set<string>; onToggle: (t: string) => void }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm" className="h-9">{selected.size ? `Tags · ${selected.size}` : 'Tags'}<ChevronDown className="size-3.5" /></Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="max-h-72 overflow-auto">
+        {all.map((t) => (
+          <DropdownMenuCheckboxItem key={t} checked={selected.has(t)} onCheckedChange={() => onToggle(t)} onSelect={(e) => e.preventDefault()}>#{t}</DropdownMenuCheckboxItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function TagEditor({ metric, suggestions, onCancel, onSave }: { metric: Metric; suggestions: string[]; onCancel: () => void; onSave: (tags: string[]) => void }) {
+  const [text, setText] = useState((metric.tags ?? []).join(', '));
+  const [busy, setBusy] = useState(false);
+  const parse = (s: string) => [...new Set(s.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean))];
+  const go = async () => { setBusy(true); try { await onSave(parse(text)); } finally { setBusy(false); } };
+  const add = (t: string) => setText((cur) => [...new Set([...parse(cur), t])].join(', '));
+  return (
+    <Dialog open onOpenChange={(o) => !o && onCancel()}>
+      <DialogContent>
+        <DialogHeader><DialogTitle className="serif font-normal text-xl">Tags · {metric.name}</DialogTitle>
+          <DialogDescription>Free-form labels (e.g. a feature like <code>checkout</code>, or <code>north-star</code>). Comma-separated; lowercased.</DialogDescription>
+        </DialogHeader>
+        <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="checkout, product, north-star" autoFocus />
+        {suggestions.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {suggestions.slice(0, 12).map((t) => <button key={t} className="text-xs rounded-full border px-2 py-0.5 text-muted-foreground hover:text-foreground hover:border-foreground/30" onClick={() => add(t)}>#{t}</button>)}
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel} disabled={busy}>Cancel</Button>
+          <Button onClick={go} disabled={busy}>{busy && <Loader2 className="size-4 animate-spin" />}Save tags</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function Section({ group, busy, onActivate, onDeprecate, onDelete, onEditTags, onOpenEvents }: {
+  group: { label: string | null; rows: Metric[] }; busy: string | null;
+  onActivate: (k: string) => void; onDeprecate: (m: Metric) => void; onDelete: (m: Metric) => void;
+  onEditTags: (m: Metric) => void; onOpenEvents: (ev: string) => void;
+}) {
+  const [open, setOpen] = useState(true);
+  return (
+    <>
+      {group.label && (
+        <TableRow className="bg-muted/40 hover:bg-muted/40">
+          <TableCell colSpan={7} className="py-2">
+            <button className="flex items-center gap-2 text-xs font-medium text-muted-foreground capitalize" onClick={() => setOpen((o) => !o)}>
+              {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}{group.label}<Badge variant="secondary">{group.rows.length}</Badge>
+            </button>
+          </TableCell>
+        </TableRow>
+      )}
+      {open && group.rows.map((m) => (
+        <TableRow key={m.id} className="group">
+          <TableCell>
+            {metricEvent(m)
+              ? <button className="font-medium text-left hover:text-primary hover:underline underline-offset-2" title="See this metric's events" onClick={() => onOpenEvents(metricEvent(m)!)}>{m.name}</button>
+              : <div className="font-medium">{m.name}</div>}
+            <div className="text-xs text-muted-foreground">{m.key}</div>
+            {(m.tags ?? []).length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-1">
+                {m.tags.map((t) => <span key={t} className="text-[11px] rounded-full border px-1.5 py-px text-muted-foreground">#{t}</span>)}
+              </div>
+            )}
+          </TableCell>
+          <TableCell><CategoryChip category={m.category} /></TableCell>
+          <TableCell><TypeTag type={m.type} /></TableCell>
+          <TableCell className="text-xs text-muted-foreground whitespace-nowrap font-mono">{sourceSummary(m)}</TableCell>
+          <TableCell className="max-w-sm"><div className="truncate text-xs text-muted-foreground italic" title={m.purpose}>{m.purpose}</div></TableCell>
+          <TableCell><StatusBadge status={m.status} /></TableCell>
+          <TableCell className="text-right whitespace-nowrap">
+            {busy === m.key ? <Loader2 className="size-4 animate-spin inline" /> : (
+              <div className="inline-flex items-center gap-1.5">
+                {m.status !== 'active' && <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => onActivate(m.key)}>activate</Button>}
+                <Overflow items={[
+                  { label: 'Edit tags', onClick: () => onEditTags(m) },
+                  ...(m.status !== 'deprecated' ? [{ label: 'Deprecate', onClick: () => onDeprecate(m) }] : []),
+                  ...(m.status === 'deprecated' ? [{ label: 'Delete metric', onClick: () => onDelete(m), danger: true }] : []),
+                ]} />
+              </div>
+            )}
+          </TableCell>
+        </TableRow>
+      ))}
+    </>
+  );
+}
+
+function groupRows(rows: Metric[], by: string): Array<{ label: string | null; rows: Metric[] }> {
+  if (by === 'none') return [{ label: null, rows }];
+  const map = new Map<string, Metric[]>();
+  // Tags are multi-valued: a metric appears under each of its tags (+ 'untagged').
+  if (by === 'tag') {
+    for (const m of rows) {
+      const keys = (m.tags ?? []).length ? m.tags : ['untagged'];
+      for (const k of keys) { if (!map.has(k)) map.set(k, []); map.get(k)!.push(m); }
+    }
+    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([label, rs]) => ({ label, rows: rs }));
+  }
+  for (const m of rows) {
+    const key = by === 'category' ? (m.category ?? 'uncategorized') : by === 'type' ? m.type : m.status;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(m);
+  }
+  return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([label, rs]) => ({ label, rows: rs }));
+}
+
+function FunnelsTable({ funnels }: { funnels: Funnel[] }) {
+  if (funnels.length === 0) return <Panel><EmptyState headline="No funnels" lead="defined from registry metrics via MCP or API" /></Panel>;
+  return (
+    <Panel title="Funnels">
+      <Table>
+        <TableHeader><TableRow><TableHead className="w-7" /><TableHead>Funnel</TableHead><TableHead>Goal</TableHead><TableHead>Steps</TableHead><TableHead>Window</TableHead></TableRow></TableHeader>
+        <TableBody>{funnels.map((f) => <FunnelRow key={f.key} funnel={f} />)}</TableBody>
+      </Table>
+    </Panel>
+  );
+}
+
+function FunnelRow({ funnel }: { funnel: Funnel }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <TableRow>
+        <TableCell><button onClick={() => setOpen((o) => !o)} className="text-muted-foreground">{open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}</button></TableCell>
+        <TableCell><div className="font-medium">{funnel.name}</div><div className="text-xs text-muted-foreground">{funnel.key}</div></TableCell>
+        <TableCell><div className="text-xs text-muted-foreground italic max-w-sm">{funnel.goal}</div></TableCell>
+        <TableCell><NumberedStepChips steps={funnel.steps} /></TableCell>
+        <TableCell className="text-xs">{Math.round(funnel.window_seconds / 86400)}d</TableCell>
+      </TableRow>
+      {open && <TableRow><TableCell /><TableCell colSpan={4} className="bg-background"><VerticalStepper steps={funnel.steps} /></TableCell></TableRow>}
+    </>
+  );
+}
+
+function EntityTypesTable({ types }: { types: { name: string; description: string }[] }) {
+  if (types.length === 0) return <Panel><EmptyState headline="No entity types" lead="register them via MCP or API before upserting entities" /></Panel>;
+  return (
+    <Panel title="Entity types">
+      <Table>
+        <TableHeader><TableRow><TableHead>Type</TableHead><TableHead>Description</TableHead></TableRow></TableHeader>
+        <TableBody>{types.map((t) => <TableRow key={t.name}><TableCell className="font-medium">{t.name}</TableCell><TableCell><div className="text-xs text-muted-foreground italic">{t.description}</div></TableCell></TableRow>)}</TableBody>
+      </Table>
+    </Panel>
+  );
+}
+
+function sourceSummary(m: Metric): string {
+  const s = m.source as Record<string, any>;
+  if (m.type === 'conversion') return `${s.from?.event} → ${s.to?.event}`;
+  if (m.type === 'state') return `entity:${s.entity_type}`;
+  if (m.type === 'value') return `${s.event}.${s.value_property} (${s.agg})`;
+  const f = Array.isArray(s.filters) && s.filters.length ? ` ·${s.filters.length}f` : '';
+  return `${s.event}${f}`;
+}

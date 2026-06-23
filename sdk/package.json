@@ -1,0 +1,22 @@
+{
+  "name": "@poolstatis/sdk",
+  "version": "0.1.0",
+  "description": "Tiny browser + Node client for sending events and entities to Poolstatis.",
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "files": ["dist"],
+  "sideEffects": false,
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0"
+  }
+}

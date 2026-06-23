@@ -1,0 +1,57 @@
+# @poolstatis/sdk
+
+Tiny browser + Node client for sending events and entities to [Poolstatis](../README.md).
+Zero dependencies. Batches, retries, and flushes on page unload so you don't lose events.
+
+```bash
+pnpm add @poolstatis/sdk   # or npm / yarn / bun
+```
+
+```ts
+import { createClient } from '@poolstatis/sdk';
+
+const ph = createClient({
+  url: 'https://analytics.example.com', // your Poolstatis platform URL
+  ingestKey: 'pk_…',                    // write-only ingest key (safe in client code)
+});
+
+// Events — distinct_id MUST be a stable user id (not a session/random id).
+ph.track('signup.completed', user.id, { plan: 'pro' });
+ph.track('doc.exported', user.id);
+
+// Entities — mutable state (merge semantics; null deletes a key).
+ph.identify('account', account.id, { plan: 'pro', seats: 7 });
+
+// Optional: force-send (e.g. server-side, before exit).
+await ph.flush();
+```
+
+## What it handles for you
+
+- **Batching** — events queue and flush every `flushIntervalMs` (default 5s) or when the
+  batch fills (`maxBatchSize`, default 100; server caps 500).
+- **No lost events on navigation** — flushes on `visibilitychange`/`pagehide` via
+  `fetch(keepalive:true)` (modern `sendBeacon`, but with the auth header).
+- **Idempotent retries** — transient 5xx/network failures retry with backoff under the same
+  `batch_id`; the server dedups, so events are never double-counted. 4xx (your bug) is
+  reported via `onError` and not retried.
+- **Bounded memory** — `maxQueue` drops oldest if the backend is unreachable for a long time.
+
+## Options
+
+| option | default | meaning |
+|--------|---------|---------|
+| `url` | — | platform base URL |
+| `ingestKey` | — | `pk_…` ingest key |
+| `flushIntervalMs` | `5000` | auto-flush cadence |
+| `maxBatchSize` | `100` | events per request (≤500) |
+| `maxQueue` | `10000` | in-memory cap (drop oldest) |
+| `fetch` | global | inject a fetch impl (tests / old runtimes) |
+| `onError` | noop | called when a flush fails after retries |
+
+## Notes
+
+- Runs anywhere `fetch` exists (Node ≥18, modern browsers). Inject `fetch` otherwise.
+- On a server, call `await ph.shutdown()` on graceful exit to flush + stop the timer.
+- The ingest key only writes events/entities — it cannot read data or touch the registry,
+  so it is safe to embed in client-side code.

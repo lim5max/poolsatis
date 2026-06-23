@@ -13,6 +13,7 @@ export interface Metric {
   name: string;
   purpose: string;
   category: string | null;
+  tags: string[];
   type: 'count' | 'unique_actors' | 'value' | 'conversion' | 'state';
   source: Record<string, unknown>;
   status: 'proposed' | 'active' | 'deprecated';
@@ -20,7 +21,20 @@ export interface Metric {
 }
 
 const METRIC_COLS =
-  'id, key, name, purpose, category, type, source, status, owner';
+  'id, key, name, purpose, category, tags, type, source, status, owner';
+
+/** Free-form tags are an open facet alongside the curated AARRR category:
+ *  lowercased, trimmed, de-duplicated, order-preserved. */
+function normalizeTags(tags: string[] | undefined): string[] {
+  if (!tags) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of tags) {
+    const t = raw.trim().toLowerCase();
+    if (t && !seen.has(t)) { seen.add(t); out.push(t); }
+  }
+  return out;
+}
 
 export async function registerMetric(
   pool: pg.Pool,
@@ -45,10 +59,10 @@ export async function registerMetric(
   }
   try {
     const { rows } = await pool.query(
-      `INSERT INTO metrics (project_id, key, name, purpose, category, type, source, owner)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING ${METRIC_COLS}`,
+      `INSERT INTO metrics (project_id, key, name, purpose, category, tags, type, source, owner)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING ${METRIC_COLS}`,
       [projectId, input.key, input.name, input.purpose, input.category ?? null,
-       input.type, JSON.stringify(source), owner],
+       normalizeTags(input.tags), input.type, JSON.stringify(source), owner],
     );
     return rows[0];
   } catch (err) {
@@ -82,13 +96,15 @@ export async function updateMetric(
        category = CASE WHEN $5::boolean THEN $6 ELSE category END,
        status = COALESCE($7, status),
        source = COALESCE($8, source),
+       tags = COALESCE($9, tags),
        updated_at = now()
      WHERE project_id = $1 AND key = $2
      RETURNING ${METRIC_COLS}`,
     [projectId, key, patch.name ?? null, patch.purpose ?? null,
      patch.category !== undefined, patch.category ?? null,
      patch.status ?? null,
-     patch.source !== undefined ? JSON.stringify(patch.source) : null],
+     patch.source !== undefined ? JSON.stringify(patch.source) : null,
+     patch.tags !== undefined ? normalizeTags(patch.tags) : null],
   );
   // The metric can disappear between getMetric and the UPDATE.
   if (!rows[0]) throw notFound('metric');
@@ -203,6 +219,38 @@ export async function defineFunnel(
     }
     throw err;
   }
+}
+
+/**
+ * Hard-delete a metric. Refuses if any funnel still references it, so the
+ * delete can never silently orphan a funnel step. (Prefer `deprecated` for
+ * routine retirement — delete is for genuine cleanup.)
+ */
+export async function deleteMetric(pool: pg.Pool, projectId: string, key: string): Promise<{ key: string }> {
+  await getMetric(pool, projectId, key); // 404 if absent
+  const { rows } = await pool.query(
+    `SELECT key FROM funnels WHERE project_id = $1 AND steps @> $2::jsonb`,
+    [projectId, JSON.stringify([{ metric_key: key }])],
+  );
+  if (rows.length > 0) {
+    throw new ApiError(
+      409,
+      'metric_in_use',
+      `metric "${key}" is referenced by funnel(s): ${rows.map((r) => r.key).join(', ')}`,
+      'delete or edit those funnels first, or deprecate the metric instead of deleting it',
+    );
+  }
+  await pool.query('DELETE FROM metrics WHERE project_id = $1 AND key = $2', [projectId, key]);
+  return { key };
+}
+
+export async function deleteFunnel(pool: pg.Pool, projectId: string, key: string): Promise<{ key: string }> {
+  const { rowCount } = await pool.query(
+    'DELETE FROM funnels WHERE project_id = $1 AND key = $2',
+    [projectId, key],
+  );
+  if (!rowCount) throw notFound('funnel', `no funnel "${key}"`);
+  return { key };
 }
 
 export async function getFunnel(pool: pg.Pool, projectId: string, key: string): Promise<Funnel> {

@@ -52,7 +52,23 @@ export interface SampleQuery {
   env?: string;
   event?: string;
   registered?: boolean;
+  distinct_id?: string;
+  filters?: PropertyFilter[];
+  from?: Date;
+  to?: Date;
   limit: number;
+}
+
+/** Server-native engagement summary for one actor, derived from their events. */
+export interface ActorSummary {
+  first_seen: string | null;
+  last_seen: string | null;
+  total_events: number;
+  distinct_events: number;
+  active_days: number;
+  sessions: number;
+  registered_share: number;
+  top_events: Array<{ event: string; count: number }>;
 }
 
 export interface RawEvent {
@@ -72,6 +88,79 @@ export interface EventNameStat {
   last_seen: string;
 }
 
+export interface EntityStatusEvidenceSpec {
+  event: string;
+  entity_type: string;
+  expected_status: string;
+}
+
+export interface EntityStatusEvidence {
+  entity_type: string;
+  entity_id: string;
+  current_status: string;
+  event: string;
+  expected_status: string;
+  last_event_at: string;
+  evidence_events: number;
+  entity_updated_at: string;
+}
+
+export interface EntityStatusEvidenceQuery {
+  projectId: string;
+  env: string;
+  specs: EntityStatusEvidenceSpec[];
+  sinceDays: number;
+  limit: number;
+}
+
+export type Interval = 'hour' | 'day' | 'week' | 'month';
+
+export interface RetentionQuery {
+  projectId: string;
+  env: string;
+  startEvent: string;
+  startFilters: PropertyFilter[];
+  returnEvent: string;
+  returnFilters: PropertyFilter[];
+  interval: 'day' | 'week' | 'month';
+  periods: number;
+  from: Date;
+  to: Date;
+}
+
+export interface RetentionCohort {
+  cohort: string; // ISO bucket start
+  size: number;
+  // retained[p] = actors from this cohort active in period p (p=0 is the cohort itself)
+  retained: number[];
+  // How many leading periods have fully elapsed by the query's `to` bound. Periods
+  // beyond this are right-censored — their 0s mean "not observed yet", not "churned".
+  mature_periods: number;
+}
+
+export interface IntervalActivityQuery {
+  projectId: string;
+  env: string;
+  event: string;
+  filters: PropertyFilter[];
+  interval: 'day' | 'week' | 'month';
+  from: Date;
+  to: Date;
+}
+
+export interface LifecyclePoint {
+  bucket: string;
+  new: number;
+  returning: number;
+  resurrecting: number;
+  dormant: number; // negative count of actors who went quiet this interval
+}
+
+export interface StickinessBin {
+  intervals_active: number;
+  actors: number;
+}
+
 /**
  * The narrow storage interface the whole platform depends on.
  * Every method must be implementable efficiently on both Postgres and
@@ -81,6 +170,18 @@ export interface EventStore {
   append(events: StorableEvent[]): Promise<void>;
   trend(q: TrendQuery): Promise<TrendPoint[]>;
   funnel(q: FunnelQuery): Promise<number[]>; // actor count per step
+  retention(q: RetentionQuery): Promise<RetentionCohort[]>;
+  lifecycle(q: IntervalActivityQuery): Promise<LifecyclePoint[]>;
+  stickiness(q: IntervalActivityQuery): Promise<StickinessBin[]>;
   sample(q: SampleQuery): Promise<RawEvent[]>;
   eventNames(projectId: string, env: string, sinceDays: number): Promise<EventNameStat[]>;
+  entityStatusEvidence(q: EntityStatusEvidenceQuery): Promise<EntityStatusEvidence[]>;
+  /**
+   * Hard-delete events for a project. Optionally scope to one env and/or a
+   * single actor (distinct_id) — the latter powers person-level deletion.
+   * Returns rows removed.
+   */
+  purge(projectId: string, env?: string, distinctId?: string): Promise<number>;
+  /** Engagement summary for one actor — powers the person page. */
+  actorSummary(projectId: string, env: string, distinctId: string): Promise<ActorSummary>;
 }

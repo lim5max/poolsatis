@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "tech-logos": {
+      "source": "crafter-station/elements",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/tech-logos/SKILL.md",
+      "computedHash": "ca694c639a242fc347cafc3759f83f3f294fd2464d6039509e8977c6941d4d6a"
+    }
+  }
+}

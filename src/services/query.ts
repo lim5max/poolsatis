@@ -3,8 +3,11 @@ import type { EventStore } from '../stores/eventStore.js';
 import type {
   EntitiesQueryInput,
   FunnelQueryInput,
+  LifecycleQueryInput,
   PropertyFilter,
   QueryInput,
+  RetentionQueryInput,
+  StickinessQueryInput,
   TrendQueryInput,
 } from '../schemas.js';
 import { parseDateInput } from '../dates.js';
@@ -26,7 +29,25 @@ export type QueryResult =
       steps: Array<{ label: string; actors: number; conversion_from_prev: number; conversion_from_start: number }>;
       meta: QueryMeta;
     }
-  | { kind: 'entities'; entities: Array<{ entity_id: string; properties: Record<string, unknown>; updated_at: string }>; meta: QueryMeta };
+  | { kind: 'entities'; entities: Array<{ entity_id: string; properties: Record<string, unknown>; updated_at: string }>; meta: QueryMeta }
+  | {
+      kind: 'retention';
+      interval: string;
+      cohorts: Array<{ cohort: string; size: number; retained: number[]; retained_pct: number[] }>;
+      meta: QueryMeta;
+    }
+  | {
+      kind: 'lifecycle';
+      interval: string;
+      series: Array<{ bucket: string; new: number; returning: number; resurrecting: number; dormant: number }>;
+      meta: QueryMeta;
+    }
+  | {
+      kind: 'stickiness';
+      interval: string;
+      bins: Array<{ intervals_active: number; actors: number }>;
+      meta: QueryMeta;
+    };
 
 export class QueryService {
   constructor(
@@ -42,7 +63,30 @@ export class QueryService {
         return this.funnel(projectId, q, now);
       case 'entities':
         return this.entities(projectId, q, now);
+      case 'retention':
+        return this.retention(projectId, q, now);
+      case 'lifecycle':
+        return this.lifecycle(projectId, q, now);
+      case 'stickiness':
+        return this.stickiness(projectId, q, now);
     }
+  }
+
+  /** Resolve a registry metric to an event-based source, or fail with a teaching hint. */
+  private async eventSource(
+    projectId: string,
+    key: string,
+  ): Promise<{ event: string; filters: PropertyFilter[] }> {
+    const metric = await getMetric(this.pool, projectId, key);
+    if (metric.type === 'conversion' || metric.type === 'state') {
+      throw badRequest(
+        'metric_not_event_based',
+        `metric "${key}" has type=${metric.type}; retention/lifecycle/stickiness need an event-based metric`,
+        'use a count / unique_actors / value metric',
+      );
+    }
+    const source = metric.source as { event: string; filters?: PropertyFilter[] };
+    return { event: source.event, filters: source.filters ?? [] };
   }
 
   private async trend(projectId: string, q: TrendQueryInput, now: Date): Promise<QueryResult> {
@@ -180,6 +224,84 @@ export class QueryService {
       kind: 'entities',
       entities,
       meta: { computed_at: now.toISOString(), sampling: null },
+    };
+  }
+
+  private async retention(projectId: string, q: RetentionQueryInput, now: Date): Promise<QueryResult> {
+    // The two metric lookups are independent — resolve them together.
+    const [start, ret] = await Promise.all([
+      this.eventSource(projectId, q.start_metric),
+      q.return_metric ? this.eventSource(projectId, q.return_metric) : Promise.resolve(null),
+    ]);
+    const returnSource = ret ?? start;
+    const from = parseDateInput(q.date_from, now);
+    const to = q.date_to ? parseDateInput(q.date_to, now) : now;
+
+    const cohorts = await this.eventStore.retention({
+      projectId, env: q.env,
+      startEvent: start.event, startFilters: start.filters,
+      returnEvent: returnSource.event, returnFilters: returnSource.filters,
+      interval: q.interval, periods: q.periods, from, to,
+    });
+
+    const censored = cohorts.some((c) => c.mature_periods < q.periods);
+    const baseNote = q.return_metric && q.return_metric !== q.start_metric
+      ? `returning actors are measured by "${q.return_metric}"`
+      : 'classic retention (start metric is also the return action)';
+    return {
+      kind: 'retention',
+      interval: q.interval,
+      cohorts: cohorts.map((c) => ({
+        ...c,
+        retained_pct: c.retained.map((n) => (c.size === 0 ? 0 : Number((n / c.size).toFixed(4)))),
+      })),
+      meta: {
+        computed_at: now.toISOString(),
+        date_range: { from: from.toISOString(), to: to.toISOString() },
+        sampling: null,
+        note: censored
+          ? `${baseNote}. Recent cohorts are right-censored: only the first \`mature_periods\` of each are fully observed — later periods read 0 because that time hasn't elapsed yet, not because actors churned.`
+          : baseNote,
+      },
+    };
+  }
+
+  private async lifecycle(projectId: string, q: LifecycleQueryInput, now: Date): Promise<QueryResult> {
+    const src = await this.eventSource(projectId, q.metric);
+    const from = parseDateInput(q.date_from, now);
+    const to = q.date_to ? parseDateInput(q.date_to, now) : now;
+    const series = await this.eventStore.lifecycle({
+      projectId, env: q.env, event: src.event, filters: src.filters, interval: q.interval, from, to,
+    });
+    return {
+      kind: 'lifecycle',
+      interval: q.interval,
+      series,
+      meta: {
+        computed_at: now.toISOString(),
+        date_range: { from: from.toISOString(), to: to.toISOString() },
+        sampling: null,
+        note: 'actors first seen inside the window count as "new" (no pre-window lookback)',
+      },
+    };
+  }
+
+  private async stickiness(projectId: string, q: StickinessQueryInput, now: Date): Promise<QueryResult> {
+    const src = await this.eventSource(projectId, q.metric);
+    const from = parseDateInput(q.date_from, now);
+    const to = q.date_to ? parseDateInput(q.date_to, now) : now;
+    const bins = await this.eventStore.stickiness({
+      projectId, env: q.env, event: src.event, filters: src.filters, interval: q.interval, from, to,
+    });
+    return {
+      kind: 'stickiness',
+      interval: q.interval,
+      bins,
+      meta: {
+        computed_at: now.toISOString(),
+        date_range: { from: from.toISOString(), to: to.toISOString() },
+        sampling: null,
+      },
     };
   }
 }

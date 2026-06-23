@@ -1,0 +1,139 @@
+/* Docs prose + small layout helpers. Headings inherit Google Sans Flex globally. */
+
+.doc-prose {
+  color: var(--paper);
+  font-size: 16px;
+  line-height: 1.7;
+  max-width: 46rem;
+}
+.doc-prose > *:first-child { margin-top: 0; }
+
+.doc-prose h1 {
+  font-size: clamp(2rem, 4vw, 2.6rem);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+  margin: 0 0 10px;
+}
+.doc-prose h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: 44px 0 14px;
+  padding-top: 8px;
+  scroll-margin-top: 90px;
+}
+.doc-prose h3 {
+  font-size: 1.18rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 30px 0 10px;
+  scroll-margin-top: 90px;
+}
+.doc-prose p { margin: 14px 0; color: #d7d6cd; }
+.doc-prose a { color: var(--acid-dim); text-decoration: none; font-weight: 500; }
+.doc-prose a:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+/* anchor link icons from rehype-autolink-headings */
+.doc-prose .heading-anchor { color: var(--ink-faint); margin-left: 8px; opacity: 0; text-decoration: none; }
+.doc-prose h2:hover .heading-anchor, .doc-prose h3:hover .heading-anchor { opacity: 1; }
+
+.doc-prose ul, .doc-prose ol { margin: 14px 0; padding-left: 1.3em; color: #d7d6cd; }
+.doc-prose li { margin: 7px 0; }
+.doc-prose li::marker { color: var(--ink-faint); }
+
+.doc-prose strong { color: var(--paper); font-weight: 600; }
+
+/* inline code */
+.doc-prose :not(pre) > code {
+  font-family: var(--font-mono-stack);
+  font-size: 0.86em;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 0.12em 0.4em;
+  color: var(--acid-dim);
+}
+
+/* code blocks */
+.doc-prose pre {
+  background: #0a0c07;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px 18px;
+  overflow-x: auto;
+  margin: 18px 0;
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+.doc-prose pre code {
+  font-family: var(--font-mono-stack);
+  color: #d7d6cd;
+  background: none;
+  border: 0;
+  padding: 0;
+}
+
+/* tables */
+.doc-prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 20px 0;
+  font-size: 14px;
+  display: block;
+  overflow-x: auto;
+}
+.doc-prose th, .doc-prose td {
+  text-align: left;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.doc-prose th { color: var(--ink-muted); font-weight: 600; font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.04em; }
+.doc-prose td code { white-space: nowrap; }
+
+/* blockquote as a callout */
+.doc-prose blockquote {
+  margin: 20px 0;
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--acid);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(205,250,79,0.04), transparent);
+  color: #d7d6cd;
+}
+.doc-prose blockquote p { margin: 6px 0; }
+
+.doc-prose hr { border: 0; border-top: 1px solid var(--line); margin: 36px 0; }
+
+/* sidebar nav active state */
+.doc-navlink {
+  display: block;
+  padding: 5px 12px;
+  border-radius: 7px;
+  font-size: 14px;
+  color: var(--ink-muted);
+  border-left: 2px solid transparent;
+  transition: color .12s, background .12s;
+}
+.doc-navlink:hover { color: var(--paper); background: rgba(241,239,232,0.04); }
+.doc-navlink.active {
+  color: var(--acid);
+  background: rgba(205,250,79,0.06);
+  border-left-color: var(--acid);
+  font-weight: 500;
+}
+
+/* on-this-page TOC */
+.doc-toclink {
+  display: block;
+  padding: 3px 0;
+  font-size: 13px;
+  color: var(--ink-muted);
+  border-left: 2px solid transparent;
+  padding-left: 12px;
+  transition: color .12s, border-color .12s;
+}
+.doc-toclink:hover { color: var(--paper); }
+.doc-toclink.active { color: var(--acid); border-left-color: var(--acid); }
+.doc-toclink.lvl-3 { padding-left: 24px; font-size: 12.5px; }

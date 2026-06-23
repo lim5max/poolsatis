@@ -2,6 +2,7 @@ import type pg from 'pg';
 import type { EventStore, StorableEvent } from '../stores/eventStore.js';
 import { ingestEventSchema, type IngestEnvelope } from '../schemas.js';
 import { registeredEventNames } from './registry.js';
+import { recordWarnings, type WarningDelta } from './warnings.js';
 
 const CLOCK_SKEW_FUTURE_MS = 5 * 60_000;
 const REGISTRY_CACHE_TTL_MS = 30_000;
@@ -73,14 +74,24 @@ export class IngestService {
     const errors: Array<{ index: number; message: string }> = [];
     let unregistered = 0;
 
+    // Accumulate warnings deduped per (kind,event) within this batch, so a noisy
+    // batch produces a handful of upserts, not one per event.
+    const warn = new Map<string, WarningDelta>();
+    const bump = (kind: WarningDelta['kind'], event: string, detail: string, sample?: unknown) => {
+      const key = `${kind}:${event}`;
+      const cur = warn.get(key);
+      if (cur) { cur.count += 1; cur.detail = detail; } // keep the most recent detail, not just the first
+      else warn.set(key, { kind, event, detail, count: 1, ...(sample !== undefined ? { sample } : {}) });
+    };
+
     rawEvents.forEach((raw, index) => {
       const parsed = ingestEventSchema.safeParse(raw);
       if (!parsed.success) {
         const issue = parsed.error.issues[0];
-        errors.push({
-          index,
-          message: issue ? `${issue.path.join('.') || 'event'}: ${issue.message}` : 'invalid event',
-        });
+        const message = issue ? `${issue.path.join('.') || 'event'}: ${issue.message}` : 'invalid event';
+        errors.push({ index, message });
+        const name = typeof (raw as { event?: unknown })?.event === 'string' ? (raw as { event: string }).event : '(unknown)';
+        bump('rejected', name, message, raw);
         return;
       }
       const e = parsed.data;
@@ -90,10 +101,14 @@ export class IngestService {
       if (timestamp.getTime() > now.getTime() + CLOCK_SKEW_FUTURE_MS || timestamp < retentionFloor) {
         timestamp = now;
         properties.$clock_skew = true;
+        bump('clock_skew', e.event, 'timestamp out of range — replaced with receipt time');
       }
 
       const isRegistered = registered.has(e.event);
-      if (!isRegistered) unregistered += 1;
+      if (!isRegistered) {
+        unregistered += 1;
+        bump('unregistered', e.event, 'no active metric covers this event');
+      }
 
       storable.push({
         projectId: project.id,
@@ -108,6 +123,10 @@ export class IngestService {
     });
 
     await this.eventStore.append(storable);
+    if (warn.size > 0) {
+      // Best-effort: a warnings-log failure must never fail ingestion.
+      await recordWarnings(this.pool, project.id, env, [...warn.values()]).catch(() => {});
+    }
 
     const result: IngestResult = { accepted: storable.length, unregistered };
     if (errors.length > 0) result.errors = errors;

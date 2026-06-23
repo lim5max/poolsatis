@@ -11,8 +11,8 @@
 
 | URI | Содержание |
 |-----|------------|
-| `poolsatis://standard/instrumentation` | Стандарт инструментации: именование событий, обязательные свойства, какие метрики ставить по типу продукта. Версионируется. (Контент — этап 2.) |
-| `poolsatis://{project}/schema` | Живая схема проекта: метрики реестра, воронки, типы сущностей, фактические имена событий за 30 дней с пометкой registered/unregistered. |
+| `poolstatis://standard/instrumentation` | Стандарт инструментации: именование событий, обязательные свойства, какие метрики ставить по типу продукта. Версионируется. (Контент — этап 2.) |
+| `poolstatis://{project}/schema` | Живая схема проекта: метрики реестра, воронки, типы сущностей, фактические имена событий за 30 дней с пометкой registered/unregistered. |
 
 Схема как ресурс — ключевой UX-ход: агент получает полный контекст проекта одним чтением, без цепочки list-вызовов.
 
@@ -28,36 +28,41 @@ get_project_schema(project)          → то же, что ресурс schema (
 ### Реестр (design-time)
 
 ```
-register_metric(project, {key, name, purpose, category, type, source})
+register_metric(project, {key, name, purpose, category, tags?, type, source})
   → {id, status: 'proposed'}
-  // purpose обязателен; сервер отклоняет пустой/шаблонный ("tracks clicks") текст
+  // purpose обязателен; tags — свободные метки (фича/north-star), нормализуются (lowercase, dedupe)
 
-update_metric(project, key, patch)   // включая активацию: {status: 'active'}
+update_metric(project, key, patch)   // включая активацию {status:'active'} и tags
+delete_metric(project, key)          // отказ, если на метрику ссылается воронка
 list_metrics(project, {status?, category?})
 
 register_entity_type(project, {name, description, prop_schema?})
 
 define_funnel(project, {key, name, goal, steps: [{metric_key, label}], window_seconds})
 list_funnels(project)
+delete_funnel(project, key)
 ```
 
 ### Запросы (analysis-time)
 
-Все запросы — Query DSL, транслируемый в `EventStore.trend/funnel` (см. [04-http-api.md](04-http-api.md)):
+Все запросы — Query DSL за `EventStore` (см. [04-http-api.md](04-http-api.md)):
 
 ```
 query_trend(project, {metric, date_from, date_to?, interval, breakdown?, env?})
-  → {series: [{bucket, value, breakdown_value?}]}
-
 query_funnel(project, {funnel | steps, date_from, date_to?, env?})
-  → {steps: [{label, actors, conversion_from_prev, conversion_from_start}]}
-
+query_retention(project, {start_metric, return_metric?, interval, periods, date_from, env?})
+query_lifecycle(project, {metric, interval, date_from, env?})   // new/returning/resurrecting/dormant
+query_stickiness(project, {metric, interval, date_from, env?})
 query_entities(project, {entity_type, filters?, limit, order_by?})
-  → {entities: [{entity_id, properties, updated_at}]}
 
-sample_events(project, {event?, registered?, limit≤100})
-  → последние события: отладка инструментации ("дошло ли событие?")
+get_person(project, {distinct_id, env?})       // engagement summary + identity entity
+sample_events(project, {event?, registered?, distinct_id?, limit≤100})  // отладка ингеста
+list_ingest_warnings(project, {env?, kind?})   // rejected/unregistered/clock_skew (лог ошибок)
+list_data_quality_issues(project, {env?, limit?, since_days?})
+  // semantic conflicts: e.g. brief.completed exists, but entity status is still "new"
 ```
+
+MCP tools expose structured JSON output (`structuredContent`) with a text JSON fallback for older clients.
 
 ### Инсайты
 
@@ -76,4 +81,4 @@ resolve_insight(project, id, {status: 'ack'|'resolved'})
 
 ## Транспорт
 
-MVP: stdio-сервер (npm-пакет `poolsatis-mcp`, токен в env) — покрывает Claude Code/Desktop и большинство IDE. Streamable HTTP — этап 3, когда появится hosted-вариант.
+MVP: stdio-сервер (npm-пакет `poolstatis-mcp`, токен в env) — покрывает Claude Code/Desktop и большинство IDE. Streamable HTTP — этап 3, когда появится hosted-вариант.

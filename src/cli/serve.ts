@@ -8,7 +8,7 @@ await migrate(pool);
 
 const app = buildServer(pool);
 await app.listen({ port: config.port, host: config.host });
-console.log(`poolsatis listening on http://${config.host}:${config.port}`);
+console.log(`poolstatis listening on http://${config.host}:${config.port}`);
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, async () => {

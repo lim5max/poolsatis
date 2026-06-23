@@ -9,6 +9,23 @@ beforeAll(async () => {
 });
 afterAll(() => env.close());
 
+describe('metric tags', () => {
+  it('stores normalized (lowercased, deduped) tags and updates them', async () => {
+    const reg = await api(env, env.secretToken, 'POST', `${P()}/metrics`, {
+      key: 'tagged_metric', name: 'Tagged', purpose: 'A metric used to test free-form feature tags.',
+      type: 'count', source: { event: 'feat.used' }, tags: ['Checkout', 'checkout', ' Product '],
+    });
+    expect(reg.status).toBe(201);
+    expect(reg.body.tags).toEqual(['checkout', 'product']); // lowercased + deduped + trimmed
+
+    const upd = await api(env, env.secretToken, 'PATCH', `${P()}/metrics/tagged_metric`, { tags: ['search'] });
+    expect(upd.body.tags).toEqual(['search']);
+
+    const list = await api(env, env.secretToken, 'GET', `${P()}/metrics`);
+    expect(list.body.metrics.find((m: any) => m.key === 'tagged_metric').tags).toEqual(['search']);
+  });
+});
+
 describe('metric registry', () => {
   it('registers a metric as proposed', async () => {
     const res = await api(env, env.secretToken, 'POST', `${P()}/metrics`, {
