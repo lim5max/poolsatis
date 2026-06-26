@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { IngestService } from '../src/services/ingest.js';
+import type { EventStore, StorableEvent } from '../src/stores/eventStore.js';
 import { activeMetric, api, createTestEnv, hoursAgo, type TestEnv } from './helpers.js';
 
 let env: TestEnv;
@@ -58,6 +60,51 @@ describe('event ingest', () => {
     expect(replay.body.duplicate).toBeUndefined();
   });
 
+  it('allows retrying a batch_id when event append fails before storage', async () => {
+    const { rows } = await env.pool.query(
+      'SELECT id, retention_months FROM projects WHERE slug = $1',
+      [env.projectSlug],
+    );
+    const project = rows[0] as { id: string; retention_months: number };
+    const eventStore = failFirstAppendEventStore();
+    const ingest = new IngestService(env.pool, eventStore);
+    const payload = {
+      batch_id: 'batch-append-fails',
+      events: [{ event: 'append.failed', distinct_id: 'u-retry' }],
+    };
+
+    await expect(ingest.processBatch(project, 'prod', payload)).rejects.toThrow('database down');
+    const retry = await ingest.processBatch(project, 'prod', payload);
+
+    expect(retry).toEqual({ accepted: 1, unregistered: 1 });
+    expect(eventStore.appends).toHaveLength(2);
+  });
+
+  it('returns retryable batch_processing while the same batch_id is still appending', async () => {
+    const { rows } = await env.pool.query(
+      'SELECT id, retention_months FROM projects WHERE slug = $1',
+      [env.projectSlug],
+    );
+    const project = rows[0] as { id: string; retention_months: number };
+    const eventStore = blockingAppendEventStore();
+    const ingest = new IngestService(env.pool, eventStore);
+    const payload = {
+      batch_id: 'batch-still-processing',
+      events: [{ event: 'append.blocked', distinct_id: 'u-processing' }],
+    };
+
+    const first = ingest.processBatch(project, 'prod', payload);
+    await eventStore.started;
+
+    await expect(ingest.processBatch(project, 'prod', payload)).rejects.toMatchObject({
+      statusCode: 503,
+      code: 'batch_processing',
+    });
+
+    eventStore.release();
+    await expect(first).resolves.toEqual({ accepted: 1, unregistered: 1 });
+  });
+
   it('returns 207 with per-element errors without sinking the batch', async () => {
     const res = await api(env, env.ingestToken, 'POST', '/i/v1/events', {
       events: [
@@ -105,6 +152,79 @@ describe('event ingest', () => {
     expect(res.status).toBe(403);
   });
 });
+
+function failFirstAppendEventStore(): EventStore & { appends: StorableEvent[][] } {
+  const appends: StorableEvent[][] = [];
+  return {
+    appends,
+    append: async (events: StorableEvent[]) => {
+      appends.push(events);
+      if (appends.length === 1) throw new Error('database down');
+    },
+    trend: async () => [],
+    funnel: async () => [],
+    retention: async () => [],
+    lifecycle: async () => [],
+    stickiness: async () => [],
+    sample: async () => [],
+    eventNames: async () => [],
+    eventStats: async () => [],
+    entityStatusEvidence: async () => [],
+    purge: async () => 0,
+    actorSummary: async () => ({
+      first_seen: null,
+      last_seen: null,
+      total_events: 0,
+      distinct_events: 0,
+      active_days: 0,
+      sessions: 0,
+      registered_share: 0,
+      top_events: [],
+    }),
+  };
+}
+
+function blockingAppendEventStore(): EventStore & {
+  appends: StorableEvent[][];
+  started: Promise<void>;
+  release: () => void;
+} {
+  const appends: StorableEvent[][] = [];
+  let release = () => {};
+  let started = () => {};
+  const startedPromise = new Promise<void>((resolve) => { started = resolve; });
+  const releasePromise = new Promise<void>((resolve) => { release = resolve; });
+  return {
+    appends,
+    started: startedPromise,
+    release,
+    append: async (events: StorableEvent[]) => {
+      appends.push(events);
+      started();
+      await releasePromise;
+    },
+    trend: async () => [],
+    funnel: async () => [],
+    retention: async () => [],
+    lifecycle: async () => [],
+    stickiness: async () => [],
+    sample: async () => [],
+    eventNames: async () => [],
+    eventStats: async () => [],
+    entityStatusEvidence: async () => [],
+    purge: async () => 0,
+    actorSummary: async () => ({
+      first_seen: null,
+      last_seen: null,
+      total_events: 0,
+      distinct_events: 0,
+      active_days: 0,
+      sessions: 0,
+      registered_share: 0,
+      top_events: [],
+    }),
+  };
+}
 
 describe('entity ingest', () => {
   it('rejects entities of unregistered types', async () => {

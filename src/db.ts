@@ -5,10 +5,14 @@ import pg from 'pg';
 
 const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'migrations');
 
-export function createPool(databaseUrl: string): pg.Pool {
+export interface PoolOptions {
+  max?: number;
+}
+
+export function createPool(databaseUrl: string, options: PoolOptions = {}): pg.Pool {
   // Timezone is pinned to UTC so date_trunc buckets are stable regardless of
   // where the server or the database happens to run.
-  return new pg.Pool({ connectionString: databaseUrl, max: 10, options: '-c timezone=UTC' });
+  return new pg.Pool({ connectionString: databaseUrl, max: options.max ?? 10, options: '-c timezone=UTC' });
 }
 
 /** Apply pending .sql migrations in lexicographic order, tracked in schema_migrations. */

@@ -3,7 +3,7 @@ import { ZodError } from 'zod';
 import type pg from 'pg';
 import { ApiError, badRequest, notFound } from '../errors.js';
 import { authenticate, requireKind, type AuthContext } from './auth.js';
-import { createContext, type AppContext } from './context.js';
+import { createContext, type AppContext, type CreateContextOptions } from './context.js';
 import {
   createApiKey, createProject, getProjectBySlug, listApiKeys,
   listProjectsWithStats, revokeApiKey, type Project,
@@ -30,6 +30,10 @@ declare module 'fastify' {
   interface FastifyRequest {
     auth: AuthContext;
   }
+}
+
+export interface ServerOptions {
+  ingestBuffer?: CreateContextOptions['ingestBuffer'];
 }
 
 const NUMERIC_TOKEN = /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/;
@@ -60,8 +64,10 @@ function parsePropFilter(token: string): PropertyFilter {
   return propertyFilterSchema.parse({ ...base, value }) as PropertyFilter;
 }
 
-export function buildServer(pool: pg.Pool): FastifyInstance {
-  const ctx = createContext(pool);
+export function buildServer(pool: pg.Pool, options: ServerOptions = {}): FastifyInstance {
+  const contextOptions: CreateContextOptions = {};
+  if (options.ingestBuffer !== undefined) contextOptions.ingestBuffer = options.ingestBuffer;
+  const ctx = createContext(pool, contextOptions);
   const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 });
 
   // The dashboard SPA is served from a different origin (vite dev or static
