@@ -3,11 +3,36 @@ export interface Config {
   databasePoolMax: number;
   port: number;
   host: string;
+  publicUrl: string;
   ingestBuffer: {
     maxEvents: number;
     maxDelayMs: number;
     maxPendingEvents: number;
   };
+  mcpRunner: {
+    command: string;
+    args: string[];
+    packageStatus: 'published' | 'publish_pending';
+    note: string;
+  };
+  auth: {
+    issuer: string;
+    audience: string;
+    jwksUri: string;
+  } | null;
+}
+
+function parseArgs(raw: string | undefined): string[] {
+  if (!raw?.trim()) return ['--silent', 'dlx', '@poolstatis/mcp'];
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('[')) {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== 'string')) {
+      throw new Error('POOLSTATIS_MCP_ARGS must be a JSON string array or a whitespace-separated string');
+    }
+    return parsed;
+  }
+  return trimmed.split(/\s+/);
 }
 
 const POSTGRES_APPEND_MAX_EVENTS = 8000;
@@ -25,6 +50,10 @@ function positiveInt(raw: string | undefined, fallback: number, name: string, ma
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+  const issuer = env.AUTH_JWT_ISSUER;
+  const audience = env.AUTH_JWT_AUDIENCE;
+  const jwksUri = env.AUTH_JWKS_URI ?? (issuer ? new URL('.well-known/jwks.json', issuer).toString() : undefined);
+  const packageStatus = env.POOLSTATIS_MCP_PACKAGE_PUBLISHED === 'true' ? 'published' : 'publish_pending';
   const ingestBuffer = {
     maxEvents: positiveInt(
       env.INGEST_BUFFER_MAX_EVENTS,
@@ -45,6 +74,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     databasePoolMax: positiveInt(env.DATABASE_POOL_MAX, 10, 'DATABASE_POOL_MAX'),
     port: env.PORT ? Number(env.PORT) : 3300,
     host: env.HOST ?? '127.0.0.1',
+    publicUrl: (env.POOLSTATIS_PUBLIC_URL ?? 'https://api.poolstatis.com').replace(/\/$/, ''),
     ingestBuffer,
+    mcpRunner: {
+      command: env.POOLSTATIS_MCP_COMMAND ?? 'pnpm',
+      args: parseArgs(env.POOLSTATIS_MCP_ARGS),
+      packageStatus,
+      note: packageStatus === 'published'
+        ? 'The configured MCP runner is marked published for this hosted deployment.'
+        : 'Publish or configure the MCP runner before treating this template as copy-paste ready.',
+    },
+    auth: issuer && audience && jwksUri ? { issuer, audience, jwksUri } : null,
   };
 }

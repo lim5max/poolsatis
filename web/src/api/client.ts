@@ -1,5 +1,5 @@
 import type {
-  ApiKeyRow, DataQualityResponse, EntityRow, Funnel, IngestWarning, Metric, MetricStatus, MetricUsage,
+  AccountMe, ApiKeyRow, DataQualityResponse, EntityRow, Funnel, HostedOnboardingResult, IngestWarning, Metric, MetricStatus, MetricUsage,
   PersonSummary, ProjectSchema, ProjectWithStats, SampleEvent, SampleFilter,
 } from './types';
 
@@ -11,15 +11,20 @@ export class ApiError extends Error {
 
 /** Thin typed wrapper over the Platform REST API (the admin console talks only to this). */
 export class PoolstatisClient {
-  constructor(private baseUrl: string, private token: string) {}
+  constructor(private baseUrl: string, private token: string | (() => Promise<string>)) {}
+
+  private async bearer(): Promise<string> {
+    return typeof this.token === 'function' ? this.token() : this.token;
+  }
 
   private async req<T>(method: string, path: string, body?: unknown): Promise<T> {
+    const token = await this.bearer();
     let res: Response;
     try {
       res = await fetch(`${this.baseUrl}${path}`, {
         method,
         headers: {
-          authorization: `Bearer ${this.token}`,
+          authorization: `Bearer ${token}`,
           ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
         },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -33,6 +38,14 @@ export class PoolstatisClient {
       throw new ApiError(e?.code ?? String(res.status), e?.message ?? 'request failed', e?.hint, res.status);
     }
     return json as T;
+  }
+
+  me() {
+    return this.req<AccountMe>('GET', '/api/v1/me');
+  }
+
+  completeOnboarding(body: { workspace_name: string; project_slug: string; project_name: string }) {
+    return this.req<HostedOnboardingResult>('POST', '/api/v1/onboarding', body);
   }
 
   // ---- projects ----
@@ -129,6 +142,10 @@ export class PoolstatisClient {
 
   issueKey(slug: string, body: { kind: 'ingest' | 'secret'; env?: string; label?: string }) {
     return this.req<{ id: string; token: string }>('POST', `/api/v1/projects/${slug}/keys`, body);
+  }
+
+  issuePersonalToken(body: { label?: string } = {}) {
+    return this.req<{ id: string; token: string }>('POST', '/api/v1/me/tokens', body);
   }
 
   revokeKey(slug: string, id: string) {

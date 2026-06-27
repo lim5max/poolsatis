@@ -84,4 +84,4 @@ resolve_insight(project, id, {status: 'ack'|'resolved'})
 
 ## Транспорт
 
-MVP: stdio-сервер (npm-пакет `poolstatis-mcp`, токен в env) — покрывает Claude Code/Desktop и большинство IDE. Streamable HTTP — этап 3, когда появится hosted-вариант.
+MVP: stdio-сервер (publish-ready npm-пакет `@poolstatis/mcp`, токен в env). Поддерживаемые template presets в hosted onboarding: Claude Code, Claude Desktop, Codex, Cursor, Warp, Windsurf, VS Code/Copilot, Cline, Zed, Continue, Replit, OpenCode, Hermes-style launchers и custom MCP host. Все они используют один stdio shape: command, args, env. До публикации npm-пакета hosted deploy должен держать runner status как `publish_pending`, чтобы UI не обещал copy-paste ready setup. Streamable HTTP — отдельный этап после hosted-стабилизации.

@@ -7,6 +7,9 @@ const pool = createPool(config.databaseUrl, { max: config.databasePoolMax });
 await migrate(pool);
 
 const app = buildServer(pool, {
+  auth: config.auth,
+  publicUrl: config.publicUrl,
+  mcpRunner: config.mcpRunner,
   ingestBuffer: config.ingestBuffer,
 });
 await app.listen({ port: config.port, host: config.host });

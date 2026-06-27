@@ -11,7 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import type { ApiKeyRow } from '../api/types';
 
 export function Keys() {
-  const { client, project } = useStore();
+  const { client, project, tokenKind } = useStore();
   const { data, error, loading, reload } = useAsync(() => client!.keys(project!), [project]);
   const [fresh, setFresh] = useState<{ token: string; kind: string } | null>(null);
   const [revoking, setRevoking] = useState<ApiKeyRow | null>(null);
@@ -22,6 +22,9 @@ export function Keys() {
   return (
     <div className="space-y-4">
       <IssueKey onIssued={(t, kind) => { setFresh({ token: t, kind }); reload(); }} issue={(b) => client!.issueKey(project!, b)} />
+      {tokenKind === 'user' && (
+        <IssuePersonalToken onIssued={(token) => setFresh({ token, kind: 'personal' })} issue={(b) => client!.issuePersonalToken(b)} />
+      )}
       <Panel title={<>API keys <span className="font-sans text-muted-foreground text-sm font-normal ml-2">tokens are stored hashed — only the hash is kept</span></>}>
         {!data || data.length === 0 ? <EmptyState headline="No keys" lead="issue one above" /> : (
           <Table>
@@ -90,7 +93,42 @@ function IssueKey({ issue, onIssued }: {
         <div className="flex-1 min-w-44 space-y-1.5"><Label className="text-xs font-medium text-muted-foreground">Label (opt)</Label><Input placeholder="e.g. web client" value={label} onChange={(e) => setLabel(e.target.value)} /></div>
         <Button onClick={submit} disabled={busy}>{busy ? <Loader2 className="size-4 animate-spin" /> : 'Issue key'}</Button>
       </div>
-      <div className="text-xs text-muted-foreground mt-2.5">ingest keys (pk_) only write events; secret keys (sk_) read &amp; manage one project. Personal tokens (pt_) for MCP are issued via the CLI.</div>
+      <div className="text-xs text-muted-foreground mt-2.5">ingest keys (pk_) only write events; secret keys (sk_) read &amp; manage one project. Hosted admins can issue personal MCP tokens below.</div>
+      {err && <div className="mt-3"><ErrorNote>{err}</ErrorNote></div>}
+    </Panel>
+  );
+}
+
+function IssuePersonalToken({ issue, onIssued }: {
+  issue: (b: { label?: string }) => Promise<{ token: string }>;
+  onIssued: (token: string) => void;
+}) {
+  const [label, setLabel] = useState('MCP client');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const submit = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const { token } = await issue(label.trim() ? { label: label.trim() } : {});
+      onIssued(token);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Panel title="Issue personal MCP token">
+      <div className="flex flex-wrap items-end gap-3.5">
+        <div className="min-w-44 flex-1 space-y-1.5">
+          <Label className="text-xs font-medium text-muted-foreground">Label</Label>
+          <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Codex laptop" />
+        </div>
+        <Button onClick={submit} disabled={busy}>{busy ? <Loader2 className="size-4 animate-spin" /> : 'Issue pt_ token'}</Button>
+      </div>
+      <div className="mt-2.5 text-xs text-muted-foreground">
+        Use <code>pt_</code> for org-wide MCP discovery. The token is shown once; store it before closing the dialog.
+      </div>
       {err && <div className="mt-3"><ErrorNote>{err}</ErrorNote></div>}
     </Panel>
   );

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Loader2 } from '@/components/icons';
 import { useStore } from '../store';
 import { Panel, EmptyState, ErrorNote, fmtNum } from '../components/ui';
+import { Onboarding } from './Onboarding';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -14,6 +15,8 @@ export function Projects() {
   const nav = useNavigate();
   const canCreate = tokenKind === 'personal' || tokenKind === 'secret';
   const open = (slug: string) => { setProject(slug); nav('/registry'); };
+
+  if (tokenKind === 'user' && projects.length === 0) return <Onboarding />;
 
   return (
     <div className="space-y-4">

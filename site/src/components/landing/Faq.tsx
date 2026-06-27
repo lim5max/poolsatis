@@ -13,11 +13,11 @@ const FAQ = [
   },
   {
     q: 'Where does my data live?',
-    a: 'In Postgres, behind a clean store interface. Self-host and it never leaves your infrastructure. When cloud ships, it’s the same engine, managed for you.',
+    a: 'In the hosted Poolstatis API, behind a clean store interface. The admin is deliberately headless; your MCP client reads and writes through scoped keys and typed tools.',
   },
   {
-    q: 'Which agents work with it?',
-    a: 'Anything that speaks MCP: Claude Code, Cursor, Windsurf, Zed, Cline, and the rest. One server entry and the analytics tools appear alongside everything else your agent can do.',
+    q: 'Which agent works with it now?',
+    a: 'Poolstatis ships MCP templates for Claude Code, Claude Desktop, Codex, Cursor, Warp, Windsurf, VS Code/Copilot, Cline, Zed, Continue, Replit, OpenCode, Hermes-style launchers, and custom MCP hosts. The server uses standard stdio MCP values; each host has its own place to paste command, args, and env.',
   },
 ];
 

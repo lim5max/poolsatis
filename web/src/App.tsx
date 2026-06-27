@@ -1,7 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { useAuth0 } from '@auth0/auth0-react';
 import { motion } from 'motion/react';
 import { LayoutGrid, List, Database, KeyRound, Settings, ChevronsUpDown, Menu, X, type PoolstatisIcon } from '@/components/icons';
+import { auth0Enabled } from './auth0';
 import { useStore } from './store';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
@@ -14,6 +16,7 @@ import { Data } from './screens/Data';
 import { Keys } from './screens/Keys';
 import { Setup } from './screens/Setup';
 import { Person } from './screens/Person';
+import { Onboarding } from './screens/Onboarding';
 
 type NavItem = { to: string; Icon: PoolstatisIcon; label: string; end?: boolean };
 const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
@@ -30,7 +33,7 @@ const titleFor = (path: string) => (path.startsWith('/data/person') ? 'Person' :
 const isProjectScoped = (path: string) => path === '/' || path.startsWith('/registry') || path.startsWith('/data') || path.startsWith('/keys');
 
 export function App() {
-  const { token } = useStore();
+  const { client } = useStore();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   useEffect(() => {
     const desktop = window.matchMedia('(min-width: 768px)');
@@ -41,7 +44,7 @@ export function App() {
     desktop.addEventListener('change', closeOnDesktop);
     return () => desktop.removeEventListener('change', closeOnDesktop);
   }, []);
-  if (!token) return <Connect />;
+  if (!client) return <Connect />;
   return (
     <Dialog open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
       <div className="min-h-screen bg-background md:grid md:h-screen md:grid-cols-[232px_1fr]">
@@ -145,6 +148,7 @@ function NavGroups({ onNavigate }: { onNavigate?: () => void }) {
 
 function ConnectionFooter({ onDisconnect }: { onDisconnect?: () => void }) {
   const { client, disconnect, tokenKind } = useStore();
+  if (auth0Enabled && tokenKind === 'user') return <HostedConnectionFooter onDisconnect={onDisconnect} />;
   const handleDisconnect = () => {
     disconnect();
     onDisconnect?.();
@@ -155,6 +159,24 @@ function ConnectionFooter({ onDisconnect }: { onDisconnect?: () => void }) {
         <span className={cn('size-1.5 rounded-full', client ? 'bg-emerald-500' : 'bg-destructive')} /> {tokenKind ?? 'connected'} key
       </span>
       <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground" onClick={handleDisconnect}>disconnect</Button>
+    </div>
+  );
+}
+
+function HostedConnectionFooter({ onDisconnect }: { onDisconnect?: () => void }) {
+  const { client, disconnect } = useStore();
+  const { logout } = useAuth0();
+  const handleDisconnect = () => {
+    disconnect();
+    onDisconnect?.();
+    logout({ logoutParams: { returnTo: window.location.origin } });
+  };
+  return (
+    <div className="mt-2 flex items-center justify-between border-t px-5 pt-3">
+      <span className="flex items-center gap-2 text-xs text-muted-foreground">
+        <span className={cn('size-1.5 rounded-full', client ? 'bg-emerald-500' : 'bg-destructive')} /> hosted auth
+      </span>
+      <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground" onClick={handleDisconnect}>sign out</Button>
     </div>
   );
 }
@@ -196,6 +218,7 @@ function Main() {
         initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.26, ease: 'easeOut' }}>
         <Routes>
           <Route path="/" element={<Projects />} />
+          <Route path="/onboarding" element={<Onboarding />} />
           <Route path="/registry" element={<Guarded><Registry /></Guarded>} />
           <Route path="/data" element={<Guarded><Data /></Guarded>} />
           <Route path="/data/person/:distinctId" element={<Guarded><Person /></Guarded>} />

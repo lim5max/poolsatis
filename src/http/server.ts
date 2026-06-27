@@ -2,8 +2,11 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
 import type pg from 'pg';
 import { ApiError, badRequest, notFound } from '../errors.js';
-import { authenticate, requireKind, type AuthContext } from './auth.js';
+import { authenticate, requireKind, type AuthContext, type JwtAuthOptions } from './auth.js';
 import { createContext, type AppContext, type CreateContextOptions } from './context.js';
+import {
+  completeHostedOnboarding, getBillingSummary, organizationHasProjects, type McpRunnerConfig,
+} from '../services/accounts.js';
 import {
   createApiKey, createProject, getProjectBySlug, listApiKeys,
   listProjectsWithStats, revokeApiKey, type Project,
@@ -33,10 +36,17 @@ declare module 'fastify' {
 }
 
 export interface ServerOptions {
+  auth?: JwtAuthOptions | null;
+  publicUrl?: string;
+  mcpRunner?: McpRunnerConfig;
   ingestBuffer?: CreateContextOptions['ingestBuffer'];
 }
 
 const NUMERIC_TOKEN = /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/;
+
+function authOwner(auth: AuthContext): string {
+  return auth.keyId ? `key:${auth.keyId}` : `user:${auth.userId}`;
+}
 
 function parseBoundedInt(raw: string | undefined, fallback: number, min: number, max: number, name: string): number {
   if (raw === undefined) return fallback;
@@ -69,6 +79,13 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
   if (options.ingestBuffer !== undefined) contextOptions.ingestBuffer = options.ingestBuffer;
   const ctx = createContext(pool, contextOptions);
   const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 });
+  const publicUrl = (options.publicUrl ?? 'https://api.poolstatis.com').replace(/\/$/, '');
+  const mcpRunner = options.mcpRunner ?? {
+    command: 'pnpm',
+    args: ['--silent', 'dlx', '@poolstatis/mcp'],
+    packageStatus: 'publish_pending' as const,
+    note: 'Publish or configure the MCP runner before treating this template as copy-paste ready.',
+  };
 
   // The dashboard SPA is served from a different origin (vite dev or static
   // host). Bearer tokens, not cookies, carry auth — so reflecting the origin
@@ -110,10 +127,11 @@ export function buildServer(pool: pg.Pool, options: ServerOptions = {}): Fastify
   app.addHook('onRequest', async (req) => {
     // CORS preflight and the public health probe carry no token.
     if (req.method === 'OPTIONS' || req.url === '/health') return;
-    req.auth = await authenticate(pool, req.headers.authorization);
+    req.auth = await authenticate(pool, req.headers.authorization, options.auth);
   });
 
   registerIngestRoutes(app, ctx);
+  registerAccountRoutes(app, ctx, publicUrl, mcpRunner);
   registerPlatformRoutes(app, ctx);
   return app;
 }
@@ -149,10 +167,97 @@ async function ingestProject(
   return rows[0];
 }
 
+// ===== Hosted account (/api/v1/me + onboarding, OIDC user tokens) =====
+
+function registerAccountRoutes(
+  app: FastifyInstance,
+  ctx: AppContext,
+  publicUrl: string,
+  mcpRunner: McpRunnerConfig,
+): void {
+  app.get('/api/v1/me', async (req) => {
+    requireKind(req.auth, 'user');
+    const { rows } = await ctx.pool.query(
+      `SELECT au.id, au.subject, au.email, au.name, au.picture_url,
+         o.id AS org_id, o.name AS org_name, om.role
+       FROM auth_users au
+       JOIN organization_members om ON om.user_id = au.id
+       JOIN organizations o ON o.id = om.org_id
+       WHERE au.id = $1 AND o.id = $2
+       LIMIT 1`,
+      [req.auth.userId, req.auth.orgId],
+    );
+    const row = rows[0];
+    if (!row) throw notFound('auth_user');
+    return {
+      user: {
+        id: row.id,
+        subject: row.subject,
+        email: row.email,
+        name: row.name,
+        picture_url: row.picture_url,
+      },
+      organization: {
+        id: row.org_id,
+        name: row.org_name,
+        role: row.role,
+      },
+      billing: await getBillingSummary(ctx.pool, req.auth.orgId),
+      onboarding: {
+        completed: await organizationHasProjects(ctx.pool, req.auth.orgId),
+      },
+    };
+  });
+
+  app.post('/api/v1/onboarding', async (req, reply) => {
+    requireKind(req.auth, 'user');
+    const body = req.body as { workspace_name?: string; project_slug?: string; project_name?: string };
+    if (!body?.workspace_name || !body?.project_slug || !body?.project_name) {
+      throw badRequest('validation_error', 'workspace_name, project_slug and project_name are required');
+    }
+    const result = await completeHostedOnboarding(ctx.pool, req.auth.orgId, {
+      workspace_name: body.workspace_name,
+      project_slug: body.project_slug,
+      project_name: body.project_name,
+    }, publicUrl, mcpRunner);
+    return reply.status(201).send(result);
+  });
+
+  app.post('/api/v1/me/tokens', async (req, reply) => {
+    requireKind(req.auth, 'user');
+    if (req.auth.userRole !== 'owner' && req.auth.userRole !== 'admin') {
+      throw new ApiError(
+        403,
+        'insufficient_role',
+        'this hosted account role cannot issue MCP tokens',
+        'ask an owner or admin to issue a personal token',
+      );
+    }
+    const body = req.body as { label?: string } | null;
+    const created = await createApiKey(ctx.pool, {
+      orgId: req.auth.orgId,
+      projectId: null,
+      kind: 'personal',
+      label: body?.label?.trim() || 'hosted MCP token',
+    });
+    return reply.status(201).send(created);
+  });
+}
+
 // ===== Platform (/api/v1, sk_/pt_ keys) =====
 
 function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
-  const platform = (req: FastifyRequest) => requireKind(req.auth, 'secret', 'personal');
+  const platform = (req: FastifyRequest) => {
+    requireKind(req.auth, 'secret', 'personal', 'user');
+    if (req.auth.kind === 'user' && req.auth.userRole !== 'owner' && req.auth.userRole !== 'admin') {
+      throw new ApiError(
+        403,
+        'insufficient_role',
+        'this hosted account role cannot manage platform resources',
+        'ask an owner or admin to upgrade your workspace role',
+      );
+    }
+  };
 
   /** Resolve :slug within the caller's scope; secret keys are pinned to their project. */
   const resolveProject = async (req: FastifyRequest): Promise<Project> => {
@@ -250,7 +355,7 @@ function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): void {
     platform(req);
     const project = await resolveProject(req);
     const input = registerMetricSchema.parse(req.body);
-    const metric = await registerMetric(ctx.pool, project.id, input, `key:${req.auth.keyId}`);
+    const metric = await registerMetric(ctx.pool, project.id, input, authOwner(req.auth));
     ctx.ingest.invalidateRegistry(project.id);
     return reply.status(201).send(metric);
   });

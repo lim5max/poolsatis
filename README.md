@@ -6,7 +6,7 @@
 
 ## Как это работает
 
-1. Агент (Claude и др.) по нашему стандарту инструментации расставляет метрики в коде продукта и регистрирует их в Poolstatis через MCP.
+1. Кодинг-агент по нашему стандарту инструментации расставляет метрики в коде продукта и регистрирует их в Poolstatis через MCP.
 2. Продукт шлёт события и сущности по HTTP в наш ингест.
 3. Данные живут у нас; владелец продукта строит дашборды и получает инсайты тоже через MCP — без захода на платформу.
 
@@ -27,59 +27,40 @@
 
 ## Быстрый старт
 
-Требуется Node 22+, pnpm и Docker.
-
-```bash
-pnpm install
-docker compose up -d            # Postgres на localhost:5444
-pnpm bootstrap "My Org" my-app "My App"   # печатает токены — сохрани их
-pnpm serve                      # Platform + Ingest API на :3300
-```
-
-Подключение MCP-сервера к агенту (Claude Code):
+1. Открой hosted admin, войди через workspace auth и создай первый проект в onboarding.
+2. Сохрани одноразовый `pt_` для MCP-клиента и `pk_` для ingest.
+3. Добавь MCP-сервер в Claude Code, Claude Desktop, Codex, Cursor, Warp, Windsurf, VS Code/Copilot, Cline, Zed, Continue, Replit, OpenCode, Hermes-style launcher или другой MCP host:
 
 ```json
 {
   "mcpServers": {
     "poolstatis": {
       "command": "pnpm",
-      "args": ["--silent", "--dir", "/path/to/poolstatis", "mcp"],
-      "env": { "POOLSTATIS_URL": "http://127.0.0.1:3300", "POOLSTATIS_TOKEN": "pt_…" }
+      "args": ["--silent", "dlx", "@poolstatis/mcp"],
+      "env": { "POOLSTATIS_URL": "https://api.poolstatis.com", "POOLSTATIS_TOKEN": "pt_…" }
     }
   }
 }
 ```
 
 `--silent` обязателен: pnpm иначе печатает баннер в stdout и ломает протокол stdio.
-
-Проверка MCP без ручного клиента:
-
-```bash
-POOLSTATIS_TOKEN=pt_… pnpm mcp:smoke --project my-app
-```
+До публикации `@poolstatis/mcp` этот JSON является publish-ready template; в hosted deploy включай copy-paste flow только после настройки реального MCP runner command/args.
 
 Отправка событий из продукта:
 
 ```bash
-curl -X POST localhost:3300/i/v1/events \
+curl -X POST https://api.poolstatis.com/i/v1/events \
   -H 'Authorization: Bearer pk_…' -H 'content-type: application/json' \
   -d '{"events":[{"event":"signup.completed","distinct_id":"u1"}]}'
 ```
 
-Демо-данные для проб: `pnpm seed demo` (260 юзеров, ~5k событий за 12 недель — печатает токены).
-
-Тесты: `pnpm test` (нужен поднятый Docker-Postgres).
+Локальный запуск остаётся внутренним dev/workflow для контрибьюторов, но публичный продуктовый путь — hosted admin + MCP client setup.
 
 ## Админка платформы
 
-`web/` — минимальная **headless-админка** (не дашборд продукта: аналитику клиент строит у себя через MCP). Таблицы: проекты, реестр метрик (с активацией/депрекейтом с причиной), данные (health/события/сущности), API-ключи (выпуск/отзыв) и вкладка **Setup & MCP** с готовым конфигом подключения.
+`web/` — минимальная **headless-админка** (не дашборд продукта: аналитику клиент строит у себя через MCP). Таблицы: проекты, реестр метрик (с активацией/депрекейтом с причиной), данные (health/события/сущности), API-ключи (выпуск/отзыв), onboarding и вкладка **Setup & MCP** с готовыми пресетами для Claude, Codex, Cursor, Warp, Windsurf, VS Code/Copilot, Cline, Zed, Continue, Replit, OpenCode, Hermes-style launchers и custom MCP.
 
-```bash
-pnpm --dir web install
-pnpm --dir web dev        # админка на :5273, dev-прокси к :3300
-```
-
-Вход — secret-ключ (`sk_`, один проект) или personal-токен (`pt_`, вся орг).
+В hosted-режиме вход идёт через Auth0/OIDC. Scoped keys (`pk_`, `sk_`, `pt_`) остаются для продукта, CI и MCP-клиентов.
 
 ## Статус
 

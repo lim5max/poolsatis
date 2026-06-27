@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Check, Copy } from '@/components/icons';
 import { useStore, useAsync } from '../store';
+import { MCP_CLIENTS, MCP_RUNNER, mcpClientById, mcpServerConfig, type McpClientId } from '../mcpClients';
 import { Panel, Loading, DangerConfirm } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -15,13 +16,19 @@ const TOOLS = [
 ];
 
 export function Setup() {
-  const { client, baseUrl, token, project, env } = useStore();
-  const serverUrl = baseUrl || 'http://127.0.0.1:3300';
+  const { client, baseUrl, token, tokenKind, project, env } = useStore();
+  const [clientId, setClientId] = useState<McpClientId>('claude-code');
+  const publicUrl =
+    (import.meta.env.VITE_POOLSTATIS_PUBLIC_URL as string | undefined) ||
+    (import.meta.env.VITE_POOLSTATIS_API_URL as string | undefined) ||
+    'https://api.poolstatis.com';
+  const serverUrl = baseUrl || publicUrl;
   const slug = project ?? 'your-project';
-  const poolstatisDir = import.meta.env.VITE_POOLSTATIS_DIR || (import.meta.env.DEV ? '/Users/maksimstil/Desktop/poolsatis' : '/path/to/poolstatis');
   const std = useAsync(() => client!.standard(), []);
+  const selectedClient = mcpClientById(clientId);
 
-  const mcpConfig = JSON.stringify({ mcpServers: { poolstatis: { command: 'pnpm', args: ['--silent', '--dir', poolstatisDir, 'mcp'], env: { POOLSTATIS_URL: serverUrl, POOLSTATIS_TOKEN: token } } } }, null, 2);
+  const mcpToken = tokenKind === 'user' ? '<replace-with-pt-or-sk>' : token;
+  const mcpConfig = mcpServerConfig(MCP_RUNNER.command, MCP_RUNNER.args, serverUrl.replace(/\/$/, ''), mcpToken);
   const ingestCurl = `curl -X POST ${serverUrl}/i/v1/events \\
   -H 'Authorization: Bearer pk_…' \\
   -H 'content-type: application/json' \\
@@ -39,9 +46,36 @@ export function Setup() {
         <p className="text-xs text-muted-foreground mt-3.5">After the product sends data, inspect it in <strong className="text-foreground font-normal">Data → Event stream</strong>. Data health shows registered coverage and entity/event consistency; ingest warnings have their own Warnings tab.</p>
       </Panel>
       <Panel title="Connect a coding agent over MCP">
-        <p className="text-muted-foreground text-sm mb-3.5">Add this to your agent's MCP config (Claude Code / Desktop). The agent registers metrics and reads data through the Poolstatis tools. <code>--silent</code> keeps pnpm's banner from corrupting the stdio protocol.</p>
+        <p className="text-muted-foreground text-sm mb-3.5">Choose where Poolstatis should appear, then copy the stdio MCP template. The command, args, and env are standard MCP values; the paste location depends on the host.</p>
+        {MCP_RUNNER.packageStatus !== 'published' && (
+          <div className="mb-3.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
+            MCP runner is not marked published for this deploy. Configure <code>VITE_POOLSTATIS_MCP_COMMAND</code>, <code>VITE_POOLSTATIS_MCP_ARGS</code>, and <code>VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED=true</code> only after the runner exists.
+          </div>
+        )}
+        <div className="mb-3.5 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {MCP_CLIENTS.map((profile) => (
+            <button
+              key={profile.id}
+              type="button"
+              onClick={() => setClientId(profile.id)}
+              aria-pressed={clientId === profile.id}
+              className={`rounded-md border p-3 text-left transition-colors ${clientId === profile.id ? 'border-primary bg-primary/10 text-foreground' : 'bg-muted/20 text-muted-foreground hover:bg-accent/50 hover:text-foreground'}`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium">{profile.name}</span>
+                {profile.badge && <Badge variant="outline" className="text-xs">{profile.badge}</Badge>}
+              </div>
+              <div className="mt-1 text-xs leading-relaxed">{profile.pasteTarget}</div>
+            </button>
+          ))}
+        </div>
+        {tokenKind === 'user' && (
+          <div className="mb-3.5 rounded-md border border-primary/30 bg-primary/5 px-4 py-3 text-xs text-muted-foreground">
+            This is a config template. Replace <code>&lt;replace-with-pt-or-sk&gt;</code> with the one-time <code>pt_</code> from onboarding, a newly issued personal token from Keys, or a project <code>sk_</code>.
+          </div>
+        )}
         <CodeBlock code={mcpConfig} />
-        <p className="text-xs text-muted-foreground mt-2.5">The token above is your session token. For an agent prefer a personal token (<code>pt_</code>) from <code>pnpm bootstrap</code>, or a project secret key from the Keys tab.</p>
+        <p className="text-xs text-muted-foreground mt-2.5">{selectedClient.pasteTarget} Use a personal token (<code>pt_</code>) for org-wide discovery, or a project secret key (<code>sk_</code>) for a narrower scope.</p>
       </Panel>
       <Panel title="Send events from your product (HTTP)">
         <p className="text-muted-foreground text-sm mb-3.5">Issue an ingest key (<code>pk_</code>) on the Keys tab — write-only, safe in client code. It encodes the project and env.</p>

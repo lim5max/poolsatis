@@ -11,26 +11,16 @@ with a `purpose`, and the admin panel showing green data-health.
 
 ---
 
-## 0. Prerequisites
+## 0. Hosted prerequisites
 
-```bash
-# from the poolstatis repo
-docker compose up -d            # Postgres on :5444
-pnpm install && pnpm serve      # Platform + Ingest API on :3300
-pnpm --dir web install && pnpm --dir web dev   # admin panel on :5273 (optional)
-```
+Open the hosted admin, sign in, and run onboarding for your workspace. Onboarding
+creates the first project and shows two one-time secrets:
 
-Get keys for a project. Either bootstrap a fresh one:
+- a `pt_` personal token for your MCP client;
+- a `pk_` ingest key for your product runtime.
 
-```bash
-pnpm bootstrap "My Org" my-app "My App"   # prints pk_/sk_/pt_ tokens — save them
-```
-
-…or seed a demo project with realistic data to explore first:
-
-```bash
-pnpm seed demo
-```
+If you lose the `pt_`, issue a narrow project `sk_` from the Keys tab and use that
+for your MCP client until personal-token rotation is exposed in account settings.
 
 Key kinds (see [ARCHITECTURE.md](../ARCHITECTURE.md)):
 
@@ -46,17 +36,19 @@ Key kinds (see [ARCHITECTURE.md](../ARCHITECTURE.md)):
 
 ### 1. Connect the MCP
 
-Add to your agent's MCP config (Claude Code / Desktop). The **Setup & MCP** tab in
-the admin panel renders this for you, pre-filled and copyable.
+Choose Claude Code, Claude Desktop, Codex, Cursor, Warp, Windsurf, VS Code/Copilot,
+Cline, Zed, Continue, Replit, OpenCode, Hermes-style launchers, or custom MCP in
+the **Setup & MCP** tab. The admin renders the same stdio command, args, and env
+for the client you use; the paste location depends on the host.
 
 ```json
 {
   "mcpServers": {
     "poolstatis": {
       "command": "pnpm",
-      "args": ["--silent", "--dir", "/path/to/poolstatis", "mcp"],
+      "args": ["--silent", "dlx", "@poolstatis/mcp"],
       "env": {
-        "POOLSTATIS_URL": "http://127.0.0.1:3300",
+        "POOLSTATIS_URL": "https://api.poolstatis.com",
         "POOLSTATIS_TOKEN": "pt_…"
       }
     }
@@ -66,6 +58,10 @@ the admin panel renders this for you, pre-filled and copyable.
 
 `--silent` is required — otherwise pnpm prints a banner to stdout and corrupts the
 stdio MCP protocol.
+
+Until `@poolstatis/mcp` is published or the hosted deploy sets a real MCP runner,
+the UI should show this as a publish-ready template, not a verified copy-paste
+command.
 
 ### 2. Run the instrumentation skill
 
@@ -95,7 +91,7 @@ hard-deleting it; future agents need that context.
 
 ```bash
 SK=sk_…
-curl -X POST http://127.0.0.1:3300/api/v1/projects/my-app/metrics \
+curl -X POST "$POOLSTATIS_URL/api/v1/projects/my-app/metrics" \
   -H "Authorization: Bearer $SK" -H 'content-type: application/json' \
   -d '{
     "key": "signup",
@@ -108,7 +104,7 @@ curl -X POST http://127.0.0.1:3300/api/v1/projects/my-app/metrics \
 # → { ... "status": "proposed" }
 
 # activate it
-curl -X PATCH http://127.0.0.1:3300/api/v1/projects/my-app/metrics/signup \
+curl -X PATCH "$POOLSTATIS_URL/api/v1/projects/my-app/metrics/signup" \
   -H "Authorization: Bearer $SK" -H 'content-type: application/json' \
   -d '{"status":"active"}'
 ```
@@ -127,7 +123,7 @@ pnpm add @poolstatis/sdk
 import { createClient } from "@poolstatis/sdk";
 
 export const ph = createClient({
-  url: "http://127.0.0.1:3300",
+  url: process.env.POOLSTATIS_URL!,
   ingestKey: process.env.POOLSTATIS_INGEST_KEY!, // pk_…
 });
 ```
@@ -143,12 +139,12 @@ events and send a `batch_id` for idempotent retries:
 
 ```bash
 # events
-curl -X POST http://127.0.0.1:3300/i/v1/events \
+curl -X POST "$POOLSTATIS_URL/i/v1/events" \
   -H 'Authorization: Bearer pk_…' -H 'content-type: application/json' \
   -d '{"batch_id":"<uuid>","events":[{"event":"signup.completed","distinct_id":"u1","properties":{"plan":"free"}}]}'
 
 # entities (mutable state — note entity_type/entity_id, not event shape)
-curl -X POST http://127.0.0.1:3300/i/v1/entities \
+curl -X POST "$POOLSTATIS_URL/i/v1/entities" \
   -H 'Authorization: Bearer pk_…' -H 'content-type: application/json' \
   -d '{"entities":[{"entity_type":"account","entity_id":"acc1","properties":{"plan":"free","seats":1}}]}'
 ```
@@ -157,7 +153,7 @@ curl -X POST http://127.0.0.1:3300/i/v1/entities \
 
 ```bash
 # did it arrive? is it registered (matches an active metric)?
-curl "http://127.0.0.1:3300/api/v1/projects/my-app/events/sample?limit=10" \
+curl "$POOLSTATIS_URL/api/v1/projects/my-app/events/sample?limit=10" \
   -H "Authorization: Bearer $SK"
 ```
 
@@ -170,7 +166,7 @@ Poolstatis is headless: you build dashboards on your side and pull via the Query
 (or the `query_*` MCP tools). The DSL accepts registry metric **keys**, never raw SQL.
 
 ```bash
-curl -X POST http://127.0.0.1:3300/api/v1/projects/my-app/query \
+curl -X POST "$POOLSTATIS_URL/api/v1/projects/my-app/query" \
   -H "Authorization: Bearer $SK" -H 'content-type: application/json' \
   -d '{"kind":"trend","metric":"signup","date_from":"-30d","interval":"day"}'
 ```

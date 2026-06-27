@@ -9,6 +9,11 @@ interface Conn {
   token: string;
 }
 
+interface HostedConn {
+  baseUrl: string;
+  getToken: () => Promise<string>;
+}
+
 interface Store {
   client: PoolstatisClient | null;
   baseUrl: string;
@@ -22,6 +27,7 @@ interface Store {
   setProject: (slug: string) => void;
   refreshProjects: () => Promise<void>;
   connect: (c: Conn) => Promise<void>;
+  connectHosted: (c: HostedConn) => Promise<void>;
   disconnect: () => void;
 }
 
@@ -49,6 +55,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const saved = loadConn();
   const [baseUrl, setBaseUrl] = useState(saved?.baseUrl ?? '');
   const [token, setToken] = useState(saved?.token ?? '');
+  const [hostedToken, setHostedToken] = useState<(() => Promise<string>) | null>(null);
+  const [explicitKind, setExplicitKind] = useState<KeyKind | null>(saved ? kindOf(saved.token) : null);
   const [projects, setProjects] = useState<ProjectWithStats[]>([]);
   const [project, setProjectState] = useState<string | null>(null);
   const [env, setEnvState] = useState(() => localStorage.getItem(ENV_KEY) ?? 'prod');
@@ -60,8 +68,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const client = useMemo(
-    () => (token ? new PoolstatisClient(baseUrl, token) : null),
-    [baseUrl, token],
+    () => (hostedToken ? new PoolstatisClient(baseUrl, hostedToken) : token ? new PoolstatisClient(baseUrl, token) : null),
+    [baseUrl, hostedToken, token],
   );
 
   const connect = useCallback(async (c: Conn) => {
@@ -70,6 +78,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(LS_KEY, JSON.stringify(c));
     setBaseUrl(c.baseUrl);
     setToken(c.token);
+    setHostedToken(null);
+    setExplicitKind(kindOf(c.token));
+    setProjects(list);
+    setProjectState(list[0]?.slug ?? null);
+  }, []);
+
+  const connectHosted = useCallback(async (c: HostedConn) => {
+    const probe = new PoolstatisClient(c.baseUrl, c.getToken);
+    await probe.me(); // creates/refreshes the hosted user and org.
+    const { projects: list } = await probe.listProjects();
+    localStorage.removeItem(LS_KEY);
+    setBaseUrl(c.baseUrl);
+    setToken('');
+    setHostedToken(() => c.getToken);
+    setExplicitKind('user');
     setProjects(list);
     setProjectState(list[0]?.slug ?? null);
   }, []);
@@ -77,6 +100,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const disconnect = useCallback(() => {
     localStorage.removeItem(LS_KEY);
     setToken('');
+    setHostedToken(null);
+    setExplicitKind(null);
     setProjects([]);
     setProjectState(null);
   }, []);
@@ -117,11 +142,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value: Store = {
-    client, baseUrl, token, tokenKind: kindOf(token), projects, project, env, availableEnvs,
+    client, baseUrl, token, tokenKind: explicitKind, projects, project, env, availableEnvs,
     setEnv,
     setProject: setProjectState,
     refreshProjects,
-    connect, disconnect,
+    connect, connectHosted, disconnect,
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

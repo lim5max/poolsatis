@@ -149,7 +149,7 @@ export interface MetricUsage {
   guidance: string[];
 }
 
-export type KeyKind = 'ingest' | 'secret' | 'personal';
+export type KeyKind = 'ingest' | 'secret' | 'personal' | 'user';
 
 export interface ApiKeyRow {
   id: string;
@@ -162,4 +162,76 @@ export interface ApiKeyRow {
 
 export interface ApiErrorBody {
   error: { code: string; message: string; hint?: string };
+}
+
+export interface BillingMeter {
+  key: string;
+  name: string;
+  unit: string;
+  aggregation: 'sum' | 'max' | 'latest';
+  free_quantity: number;
+  overage_unit_quantity: number;
+  overage_price_cents: string;
+  pricing_stage: 'free_now' | 'future_reference' | 'active';
+  source_note: string;
+}
+
+export interface BillingSummary {
+  plan: {
+    id: string;
+    name: string;
+    price_cents: number;
+    currency: string;
+    billing_interval: string;
+    included_events_monthly: number;
+    included_mtu_monthly: number;
+    included_projects: number;
+    included_retention_months: number;
+    included_seats: number;
+    pricing_stage: string;
+    features: Record<string, unknown>;
+  };
+  status: string;
+  billing_limit_cents: number | null;
+  current_period_start: string;
+  current_period_end: string;
+  meters: BillingMeter[];
+}
+
+export interface AccountMe {
+  user: {
+    id: string;
+    subject: string;
+    email: string | null;
+    name: string | null;
+    picture_url: string | null;
+  };
+  organization: {
+    id: string;
+    name: string;
+    role: 'owner' | 'admin' | 'member';
+  };
+  billing: BillingSummary;
+  onboarding: {
+    completed: boolean;
+  };
+}
+
+export interface HostedOnboardingResult {
+  organization: { id: string; name: string };
+  project: { slug: string; name: string; timezone: string };
+  tokens: {
+    personal: string;
+    ingest_prod: string;
+  };
+  mcp: {
+    command: string;
+    args: string[];
+    package_status: 'published' | 'publish_pending';
+    note: string;
+    env: {
+      POOLSTATIS_URL: string;
+      POOLSTATIS_TOKEN: string;
+    };
+  };
 }

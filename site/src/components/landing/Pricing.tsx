@@ -5,36 +5,36 @@ export function Pricing() {
     <section className="band band-line" id="pricing">
       <div className="wrap">
         <div className="sec-head reveal">
-          <h2>Free to self-host. <span className="it">Forever.</span></h2>
+          <h2>$0 while we shape hosted. <span className="it">Metered later.</span></h2>
           <p className="sec-sub">
-            The whole platform is open source. Run it yourself, or let us run it for you when cloud lands.
+            Start with a hosted agent workspace for free. We already track the usage dimensions that will make future pricing predictable.
           </p>
         </div>
         <div className="price-grid">
           <div className="plan reveal">
-            <span className="pname">Self-host</span>
-            <div className="pprice">$0 <small>/ forever</small></div>
-            <p className="pdesc">The complete platform on your own Postgres. No seat limits, no event caps.</p>
+            <span className="pname">Hosted preview</span>
+            <div className="pprice">$0 <small>/ now</small></div>
+            <p className="pdesc">Create a workspace, connect your MCP client, register metrics, and send events without a card.</p>
             <ul>
-              <li>Ingest, registry, query DSL &amp; MCP server</li>
-              <li>Headless admin panel for humans</li>
-              <li>Unlimited projects, metrics &amp; events</li>
-              <li>Your data stays on your infra</li>
+              <li>Templates for Claude, Codex, Cursor, Warp, and custom MCP hosts</li>
+              <li>1 project on the free hosted plan</li>
+              <li>1M monthly events tracked before billing exists</li>
+              <li>12 months retention target for preview workspaces</li>
             </ul>
-            <a className="btn btn-ghost" href="https://github.com" target="_blank" rel="noreferrer">Clone the repo</a>
+            <Link className="btn btn-primary" to="/signup">Start for free <span className="arr">↗</span></Link>
           </div>
           <div className="plan feature reveal">
-            <span className="flag">Managed waitlist</span>
-            <span className="pname">Cloud</span>
-            <div className="pprice">Waitlist <small>/ managed</small></div>
-            <p className="pdesc">Hosted, scaled, and backed up for you. Same platform, none of the ops.</p>
+            <span className="flag">Planned meters</span>
+            <span className="pname">Future billing</span>
+            <div className="pprice">$0 <small>/ until enabled</small></div>
+            <p className="pdesc">The schema is ready for usage-based pricing, but charges are not enforced yet.</p>
             <ul>
-              <li>Everything in Self-host</li>
-              <li>Managed Postgres &amp; retention</li>
-              <li>Auto-generated insights worker</li>
-              <li>Team access &amp; audit log</li>
+              <li>Events, similar to PostHog-style event billing</li>
+              <li>Monthly tracked users as an Amplitude-style option</li>
+              <li>Retained entities, projects, retention, and seats</li>
+              <li>Limits and rates visible before enforcement</li>
             </ul>
-            <Link className="btn btn-primary" to="/signup">Join the waitlist <span className="arr">↗</span></Link>
+            <Link className="btn btn-ghost" to="/docs">Read the model</Link>
           </div>
         </div>
       </div>

@@ -17,6 +17,9 @@ importers:
       fastify:
         specifier: ^5.3.0
         version: 5.8.5
+      jose:
+        specifier: ^6.2.3
+        version: 6.2.3
       pg:
         specifier: ^8.16.0
         version: 8.21.0

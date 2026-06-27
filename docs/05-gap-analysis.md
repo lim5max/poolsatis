@@ -8,14 +8,15 @@ Poolstatis already owns the hard, differentiating half of PostHog. The metadata 
 
 The gaps fall into three buckets:
 
-1. **Read-side query breadth.** Retention, lifecycle, stickiness, and funnel-correlation are pure aggregations over the existing partitioned `events` table — each a new branch on the Query DSL plus one new `EventStore` method. Highest fit-to-effort wins.
+1. **Read-side query breadth.** Retention, lifecycle, and stickiness now exist in the Query DSL. The remaining high-leverage read feature is funnel-correlation: it should explain conversion movement using registered metrics and their declared purposes.
 2. **The actor layer.** `distinct_id` is currently a raw external string with no actor/alias resolution (`docs/01-data-model.md` explicitly defers it). Per-user retention, anonymous→identified funnels, and cohorts are blocked on a small but foundational identity-merge + actor-link change.
 3. **The agent-native control loop.** Feature flags + experiments + Bayesian significance turn Poolstatis from a read-only analytics tool into the *ship → measure → decide* loop a coding agent actually runs — reusing Event/Metric/Entity wholesale with zero new infra.
 
-**Validating the brief's hypothesis** (new query types + cohorts + lightweight flags are the natural near-term wins): **mostly correct, but mis-ordered.** Two corrections:
+**Validating the brief's hypothesis** (new query types + cohorts + lightweight flags are the natural near-term wins): **mostly correct, but the order has changed as the codebase moved.** Two corrections:
 
-- **Identity/actor resolution must precede per-user retention and cohorts.** Shipping retention on raw `distinct_id` quietly miscounts the moment a single user appears under two ids. The actor link is small, foundational, and a *correctness upgrade over PostHog*.
+- **Identity/actor resolution must precede cohorts and anonymous→identified analysis.** Retention/lifecycle/stickiness currently operate on raw `distinct_id`; that is acceptable for stable authenticated ids, but anonymous→identified flows still need actor-linking to avoid quiet miscounts.
 - **Flags + experiments are higher strategic leverage than stickiness/lifecycle**, even though slightly more work, because they close the agent's core loop.
+- **Onboarding proof gates are now a commercial prerequisite.** The product needs to prove MCP connection, SDK install, first event, registry activation, and first query result before a user trusts the agent-native loop. See [08-agent-onboarding-growth-plan.md](08-agent-onboarding-growth-plan.md).
 
 Everything genuinely infra-heavy — session replay, autocapture, HogQL/SQL, ClickHouse/Kafka, real-time CDP fan-out — is correctly skipped or deferred. Replay and SQL are not merely expensive; they are *anti-fits* for an agent consumer and for the semantics-first thesis.
 
@@ -42,22 +43,22 @@ Ranked by **(fit × value) / effort**, excluding infra-heavy items.
 
 | # | Feature | Effort | Why it ranks here |
 |---|---------|--------|-------------------|
-| 1 | **Actor link + identity merge** | M | Foundational; unblocks per-user retention/lifecycle/cohorts. Explicit, audited, reversible alias *fact* resolved at query time — a correctness win over PostHog's destructive ingest-order merge. |
-| 2 | **Retention query type** | M | Highest-value insight after trends/funnels; one windowed self-join over existing events; JSON grid is trivial for an agent. |
-| 3 | **Lifecycle query type** | M | Best "healthy underneath flat growth?" answer; reuses retention's active-interval machinery; clean 4-bucket schema. |
-| 4 | **Funnel correlation analysis** | M | Signature feature. Registry-constrained candidate space makes it cheap *and* meaningful; explains drop-off in terms of declared purpose. |
-| 5 | **Static cohorts** | S | Materialized entities-query result; reuses Entity + entities query + compileFilters; purpose-tagged; composes as a query filter and flag/experiment target. |
-| 6 | **Feature flags** (def + deterministic eval + multivariate + payloads + definitions endpoint) | M | Pure-functional over Postgres rows; a flag is a registry entry with a `purpose`; reuses the existing filter AST. Substrate for experiments. |
-| 7 | **`$feature_flag_called` exposure events (+ dedup)** | S | Linchpin that makes experiments computable; collapses onto the existing Event + registry; ship with flag eval. |
-| 8 | **Experiment = flag bound to metrics + Bayesian significance** | M | Closes the agent's ship→measure→decide loop. Bayesian chance-to-win is pure math over Postgres aggregates and more agent-legible than p-values. |
-| 9 | **Property taxonomy on the registry** | M | Extends existing registry tables; lets an agent introspect "what properties, what do they mean, are they trusted?"; surfaces via existing schema endpoint. |
-| 10 | **Materialized rollups for registered metrics/funnels** | M | The registry tells you *in advance* what to precompute — a performance advantage PostHog leaves manual. Keeps single-Postgres fast; buys time before any ClickHouse migration. |
+| 1 | **Onboarding proof gates + metric packs** | M | Commercial prerequisite. The user should reach MCP connected → SDK installed → first real event → proposed metrics → activated registry → first answer, with no fake green states. |
+| 2 | **Actor link + identity merge** | M | Foundational; unblocks anonymous→identified funnels, accurate cohorts, and better retention. Explicit, audited, reversible alias *fact* resolved at query time — a correctness win over PostHog's destructive ingest-order merge. |
+| 3 | **Funnel correlation analysis** | M | Signature feature. Registry-constrained candidate space makes it cheap *and* meaningful; explains drop-off in terms of declared purpose. |
+| 4 | **Static cohorts** | S | Materialized entities-query result; reuses Entity + entities query + compileFilters; purpose-tagged; composes as a query filter and flag/experiment target. |
+| 5 | **Feature flags** (def + deterministic eval + multivariate + payloads + definitions endpoint) | M | Pure-functional over Postgres rows; a flag is a registry entry with a `purpose`; reuses the existing filter AST. Substrate for experiments. |
+| 6 | **`$feature_flag_called` exposure events (+ dedup)** | S | Linchpin that makes experiments computable; collapses onto the existing Event + registry; ship with flag eval. |
+| 7 | **Experiment = flag bound to metrics + Bayesian significance** | M | Closes the agent's ship→measure→decide loop. Bayesian chance-to-win is pure math over Postgres aggregates and more agent-legible than p-values. |
+| 8 | **Property taxonomy on the registry** | M | Extends existing registry tables; lets an agent introspect "what properties, what do they mean, are they trusted?"; surfaces via existing schema endpoint. |
+| 9 | **Materialized rollups for registered metrics/funnels** | M | The registry tells you *in advance* what to precompute — a performance advantage PostHog leaves manual. Keeps single-Postgres fast; buys time before any ClickHouse migration. |
 
 **Recommended sequencing into waves:**
 
-- **Wave A (foundation + flagship reads):** Actor link/identity merge (1) → Retention (2) → Lifecycle (3) → Funnel correlation (4). This wave delivers the differentiated, computable insight set on a correct actor model.
-- **Wave B (the agent loop):** Static cohorts (5) → Feature flags + exposure events (6, 7) → Experiments + significance (8). Cohorts land first so flag/experiment targeting can reference them.
-- **Wave C (semantic + performance hardening, can overlap):** Property taxonomy (9) and materialized rollups (10). Both extend existing tables and are agent-invisible but compounding.
+- **Wave A (trust + first value):** onboarding proof gates, website/SaaS/AI metric packs, MCP verification tools, and the first real query result.
+- **Wave B (foundation + flagship reads):** actor link/identity merge → funnel correlation. This wave delivers differentiated, computable insights on a correct actor model.
+- **Wave C (the agent loop):** static cohorts → feature flags + exposure events → experiments + significance. Cohorts land first so flag/experiment targeting can reference them.
+- **Wave D (semantic + performance hardening, can overlap):** property taxonomy and materialized rollups. Both extend existing tables and are agent-invisible but compounding.
 
 > **Cross-cutting rule:** every object above ships its REST CRUD **and** its MCP tool in the same change — never as a follow-on. The mandatory `purpose`/`goal` metadata is what makes the MCP responses self-describing.
 
@@ -65,7 +66,7 @@ Ranked by **(fit × value) / effort**, excluding infra-heavy items.
 
 ### Build later (right idea, wrong time / blocked on a prerequisite)
 
-- **Stickiness** (S) — nearly free once retention/lifecycle exist (histogram of the same per-actor active-interval data). Ship right after lifecycle.
+- **Stickiness refinements** (S) — the query type exists; next work is better docs, default metric-pack usage, and edge-case tests around partial intervals.
 - **Session primitive** (M) — derived, purpose-taggable aggregate (no replay infra); unblocks Paths. Add after the core reads.
 - **Paths / user journeys** (L) — edge list, not a Sankey; depends on the Session primitive; the first thing to strain single-Postgres at volume; lower semantic payoff.
 - **Funnel enhancements** (M) — exclusion steps, time-to-convert, conversion-over-time; refinements on the working funnel CTE; do after correlation.
@@ -104,7 +105,7 @@ Ranked by **(fit × value) / effort**, excluding infra-heavy items.
 
 Poolstatis's edge is not feature parity — it is that **semantics are first-class, so insights are computable and the consumer is an agent, not a human eye.** The build-now list is chosen to compound that edge:
 
-- New **query types** (retention/lifecycle/correlation) return structured JSON an agent reasons over directly — the triangular grids and Sankeys that justify PostHog's UI are irrelevant here.
+- Existing **retention/lifecycle/stickiness** queries already return structured JSON an agent reasons over directly; **funnel correlation** is the next flagship read-side addition. The triangular grids and Sankeys that justify PostHog's UI are secondary here.
 - **Funnel correlation** constrained to the registry is the purest expression of "insights become computable": it explains *why* a goal moved in terms of declared purpose.
 - **Flags + experiments** close the agent's native loop, and the mandatory hypothesis/goal forces the rigor PostHog leaves optional.
 - **Property taxonomy** and **materialized rollups** turn the registry into both an introspection surface and a performance advantage — neither of which PostHog gets for free, because it never required meaning up front.

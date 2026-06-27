@@ -6,13 +6,13 @@ const STEPS: Step[] = [
   {
     num: 'Connect',
     h: 'Add the MCP server',
-    p: 'Drop Poolstatis into your agent’s MCP config. It instantly gains tools to register, query, and audit. No SDK to install.',
+    p: 'Choose Claude, Codex, Cursor, Warp, Windsurf, VS Code/Copilot, or a custom MCP host. Poolstatis gives the same stdio command, args, and env for the client you use.',
     code: (
       <>
         <span className="c">{`// .mcp.json`}</span>{`
 { `}<span className="k">"poolstatis"</span>{`: {
-  `}<span className="k">"command"</span>{`: `}<span className="s">"npx"</span>{`,
-  `}<span className="k">"args"</span>{`: [`}<span className="s">"@poolstatis/mcp"</span>{`]
+  `}<span className="k">"command"</span>{`: `}<span className="s">"pnpm"</span>{`,
+  `}<span className="k">"args"</span>{`: [`}<span className="s">"--silent"</span>{`, `}<span className="s">"dlx"</span>{`, `}<span className="s">"@poolstatis/mcp"</span>{`]
 }}`}
       </>
     ),
@@ -55,7 +55,7 @@ export function HowItWorks() {
           <h2>Three moves. <span className="it">Your agent does all of them.</span></h2>
           <p className="sec-sub">
             You connect once. After that, instrumentation and analysis happen in the same place your
-            agent already works: the chat.
+            coding agent already works: the chat.
           </p>
         </div>
         <div className="steps">

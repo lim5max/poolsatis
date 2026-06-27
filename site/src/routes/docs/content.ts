@@ -53,15 +53,17 @@ register metrics, and verify events arrive.
 
 ## 1. Connect the MCP server
 
-Add Poolstatis to your agent's MCP configuration:
+Add Poolstatis to Claude Code, Claude Desktop, Codex, Cursor, Warp, Windsurf,
+VS Code/Copilot, Cline, Zed, Continue, Replit, OpenCode, Hermes-style launchers,
+or another MCP host:
 
 \`\`\`json
 {
   "poolstatis": {
-    "command": "npx",
-    "args": ["@poolstatis/mcp"],
+    "command": "pnpm",
+    "args": ["--silent", "dlx", "@poolstatis/mcp"],
     "env": {
-      "POOLSTATIS_URL": "https://your-host",
+      "POOLSTATIS_URL": "https://api.poolstatis.com",
       "POOLSTATIS_TOKEN": "pt_your_personal_token"
     }
   }
@@ -69,6 +71,9 @@ Add Poolstatis to your agent's MCP configuration:
 \`\`\`
 
 Your agent now has tools to register, query, and audit.
+
+Until the MCP runner package is published or configured for a hosted deploy, treat this as
+a publish-ready template rather than a verified copy-paste command.
 
 ## 2. Let your agent instrument
 
