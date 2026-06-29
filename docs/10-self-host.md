@@ -1,0 +1,109 @@
+# Self-host Poolstatis with Docker
+
+Docker Compose is the recommended self-host path. It runs:
+
+- Postgres with a persistent volume,
+- the Poolstatis Platform + Ingest API,
+- the static admin console with `/api`, `/i`, and `/health` proxied to the API.
+
+## Quick start
+
+```bash
+git clone https://github.com/lim5max/poolsatis.git
+cd poolsatis
+
+docker compose -f docker-compose.selfhost.yml up -d --build
+curl http://localhost:3300/health
+```
+
+Create the first organization, project, and keys:
+
+```bash
+docker compose -f docker-compose.selfhost.yml run --rm poolstatis \
+  node dist/cli/bootstrap.js "Acme" acme "Acme Product"
+```
+
+Save the printed tokens immediately. Poolstatis stores only token hashes.
+
+Open the admin console:
+
+```text
+http://localhost:8080
+```
+
+Paste the printed `secret` (`sk_...`) or `personal` (`pt_...`) token. For product
+ingest, use the printed `ingest prod` (`pk_...`) token.
+
+## Product ingest
+
+```bash
+curl -X POST http://localhost:3300/i/v1/events \
+  -H 'Authorization: Bearer pk_...' \
+  -H 'content-type: application/json' \
+  -d '{"events":[{"event":"signup.completed","distinct_id":"u1"}]}'
+```
+
+## MCP setup
+
+Until `@poolstatis/mcp` is published, run the MCP server from a local checkout:
+
+```bash
+POOLSTATIS_URL=http://localhost:3300 \
+POOLSTATIS_TOKEN=pt_... \
+pnpm mcp
+```
+
+For an agent config, use the same URL and token:
+
+```json
+{
+  "mcpServers": {
+    "poolstatis": {
+      "command": "pnpm",
+      "args": ["--silent", "--dir", "/path/to/poolsatis", "mcp"],
+      "env": {
+        "POOLSTATIS_URL": "http://localhost:3300",
+        "POOLSTATIS_TOKEN": "pt_..."
+      }
+    }
+  }
+}
+```
+
+## Production checklist
+
+For a real VPS, create an env file first:
+
+```bash
+cp .env.selfhost.example .env.selfhost
+$EDITOR .env.selfhost
+docker compose --env-file .env.selfhost -f docker-compose.selfhost.yml up -d --build
+```
+
+Set at minimum:
+
+- `POSTGRES_PASSWORD` to a strong value,
+- `POOLSTATIS_PUBLIC_URL` to the public HTTPS URL,
+- `POOLSTATIS_ADMIN_PORT` and `POOLSTATIS_API_PORT` only if the defaults conflict.
+
+Put the admin/API behind a reverse proxy such as Caddy, Nginx, or Traefik for TLS.
+Keep Postgres private to the Docker network. Back up the `poolstatis_pgdata` volume.
+
+Recommended small VPS baseline: 2 vCPU, 4 GB RAM, and 50+ GB SSD. A 1 GB VPS can
+work for demos, but it is tight once Postgres, Node, the proxy, and the OS are all
+running.
+
+## Operations
+
+```bash
+docker compose -f docker-compose.selfhost.yml ps
+docker compose -f docker-compose.selfhost.yml logs -f poolstatis
+docker compose -f docker-compose.selfhost.yml pull
+docker compose -f docker-compose.selfhost.yml up -d --build
+```
+
+Dangerous: this removes all local data.
+
+```bash
+docker compose -f docker-compose.selfhost.yml down -v
+```

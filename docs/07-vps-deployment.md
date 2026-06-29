@@ -2,6 +2,9 @@
 
 Poolstatis has four deployable/portable pieces. Keep them separate.
 
+For the shortest working install, use the Docker Compose guide:
+[docs/10-self-host.md](10-self-host.md).
+
 ## What runs on the VPS
 
 - **Platform + Ingest API**: `pnpm serve`, behind HTTPS/reverse proxy.

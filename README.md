@@ -4,6 +4,12 @@
 
 Ключевая идея: метрики в платформе рождаются **вместе с семантикой** — каждая метрика регистрируется с ответом на вопрос «зачем она собирается» и местом в воронке. Это делает инсайты вычислимыми, а инструментацию — проверяемой.
 
+## Source available
+
+Poolstatis опубликован как source-available под [PolyForm Shield License 1.0.0](LICENSE): core можно читать, запускать и менять для разрешенных сценариев, но нельзя продавать Poolstatis как конкурирующий продукт или предоставлять его как competing hosted/managed service. Правила участия: [CONTRIBUTING.md](CONTRIBUTING.md), security flow: [SECURITY.md](SECURITY.md), release checklist: [docs/09-source-available-release.md](docs/09-source-available-release.md).
+
+Этот repo теперь только про систему: backend, ingest, MCP, SDK, admin SPA, migrations, technical docs и Docker self-host. Публичный лендинг/docs/waitlist вынесены в отдельный локальный repo: `/Users/maksimstil/Desktop/poolsatis-site`.
+
 ## Как это работает
 
 1. Кодинг-агент по нашему стандарту инструментации расставляет метрики в коде продукта и регистрирует их в Poolstatis через MCP.
@@ -22,8 +28,36 @@
 | [docs/05-gap-analysis.md](docs/05-gap-analysis.md) | Что есть vs PostHog и приоритеты следующих волн |
 | [docs/06-instrumenting-a-product.md](docs/06-instrumenting-a-product.md) | Как занести метрики в продукт (агент/MCP или вручную) |
 | [docs/07-vps-deployment.md](docs/07-vps-deployment.md) | Как раскладывать Platform API, MCP, SDK и skills при деплое |
+| [docs/09-source-available-release.md](docs/09-source-available-release.md) | Как вести source-available релиз и GitHub hygiene |
+| [docs/10-self-host.md](docs/10-self-host.md) | Самый короткий self-host путь через Docker Compose |
+| [docs/11-repository-split.md](docs/11-repository-split.md) | Границы system/site/cloud репозиториев |
 | [sdk/README.md](sdk/README.md) | `@poolstatis/sdk` — клиент для продукта (батчинг, ретраи, flush на unload) |
 | [.claude/skills/poolstatis-instrument](.claude/skills/poolstatis-instrument/SKILL.md) | Skill: процедура инструментации продукта агентом |
+
+## Локальная разработка
+
+```bash
+docker compose up -d
+pnpm install
+pnpm migrate
+pnpm bootstrap "Poolstatis" poolstatis "Local project"
+pnpm serve
+pnpm --dir web dev
+```
+
+Перед PR по backend/shared logic запускай `pnpm typecheck && pnpm test`. Перед изменениями админки запускай `pnpm --dir web build`. Публичный сайт меняется в `/Users/maksimstil/Desktop/poolsatis-site`.
+
+## Self-host за 3 команды
+
+```bash
+docker compose -f docker-compose.selfhost.yml up -d --build
+curl http://localhost:3300/health
+docker compose -f docker-compose.selfhost.yml run --rm poolstatis \
+  node dist/cli/bootstrap.js "Acme" acme "Acme Product"
+```
+
+Потом открой `http://localhost:8080` и вставь напечатанный `sk_` или `pt_` токен.
+Полная инструкция: [docs/10-self-host.md](docs/10-self-host.md).
 
 ## Быстрый старт
 

@@ -1,0 +1,38 @@
+name: Feature request
+description: Propose a scoped product or developer-experience improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What decision, workflow, or agent capability is blocked today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Describe the smallest useful change.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Include simpler approaches or existing workarounds.
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      options:
+        - Ingest API
+        - Query DSL
+        - Registry
+        - MCP server
+        - SDK
+        - Admin SPA
+        - Site/docs
+        - Cloud
+        - Other

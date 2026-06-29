@@ -11,15 +11,21 @@ is the customer's job via MCP/SDK.
 
 - `src/` — backend (TypeScript, Fastify, Postgres). Ingest API (`/i/v1/*`) + Platform API (`/api/v1/*`) + MCP server.
 - `web/` — admin SPA (Vite + **React 19** + **shadcn/ui** + Tailwind v4). Headless platform admin.
-- `site/` — public marketing site (Vite + React 19 + Tailwind v4): landing (block components in
-  `src/components/landing/`), auth routes `/login` `/signup` (UI-only, no DB), and a `/docs`
-  section (3-column layout; content authored as markdown in `src/routes/docs/content.ts`, rendered
-  with **react-markdown**). Headings use **Google Sans Flex** (OFL variable font, self-hosted at
-  `site/public/fonts/`). Dark brand theme (acid-lime on ink). Build: `pnpm --dir site build`.
 - `sdk/` — `@poolstatis/sdk`, the browser+node client products embed.
 - `docs/` — `01-data-model` … `06-instrumenting-a-product`, `05-gap-analysis` (roadmap).
 - `migrations/` — plain `.sql`, applied in order by `src/db.ts` on `serve`/`migrate`.
 - `.claude/skills/poolstatis-{instrument,maintain,analyze}/` — agent skills.
+
+## Repository boundaries
+
+- This repo (`/Users/maksimstil/Desktop/poolsatis`) is the source-available system repo:
+  backend, ingest, MCP, SDK, admin SPA, migrations, technical docs, and Docker self-host.
+- The marketing site, public docs UI, `/login`, `/signup`, Vercel waitlist function, and
+  Resend waitlist config live in `/Users/maksimstil/Desktop/poolsatis-site`.
+- Future Cloud-only code (hosted auth, billing, managed infra, Cloud ops) belongs in a
+  separate private repo, not in this source-available system repo.
+- Do not reintroduce `site/` here. If copy/docs changes affect the landing or public docs UI,
+  switch to `/Users/maksimstil/Desktop/poolsatis-site`.
 
 ## Commands
 
@@ -33,6 +39,7 @@ pnpm typecheck && pnpm test     # tsc + vitest (tests REQUIRE Docker Postgres ru
 pnpm --dir web dev              # admin on :5273 (vite proxies /api,/i,/health → :3300)
 pnpm --dir web build            # tsc -b && vite build
 pnpm --dir sdk test             # SDK unit tests (mocked fetch, no DB)
+docker compose -f docker-compose.selfhost.yml up -d --build  # self-host stack
 ```
 
 ## Architecture (keep these invariants)

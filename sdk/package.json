@@ -2,6 +2,7 @@
   "name": "@poolstatis/sdk",
   "version": "0.1.0",
   "description": "Tiny browser + Node client for sending events and entities to Poolstatis.",
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "main": "dist/index.js",
   "module": "dist/index.js",

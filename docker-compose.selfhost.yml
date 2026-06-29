@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-poolsatis}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-poolsatis}
+      POSTGRES_DB: ${POSTGRES_DB:-poolsatis}
+    volumes:
+      - poolstatis_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-poolsatis} -d ${POSTGRES_DB:-poolsatis}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  poolstatis:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-poolsatis}:${POSTGRES_PASSWORD:-poolsatis}@postgres:5432/${POSTGRES_DB:-poolsatis}
+      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-10}
+      HOST: 0.0.0.0
+      PORT: 3300
+      POOLSTATIS_PUBLIC_URL: ${POOLSTATIS_PUBLIC_URL:-http://localhost:8080}
+      INGEST_BUFFER_MAX_EVENTS: ${INGEST_BUFFER_MAX_EVENTS:-1000}
+      INGEST_BUFFER_MAX_DELAY_MS: ${INGEST_BUFFER_MAX_DELAY_MS:-10}
+      INGEST_BUFFER_MAX_PENDING_EVENTS: ${INGEST_BUFFER_MAX_PENDING_EVENTS:-50000}
+      POOLSTATIS_MCP_PACKAGE_PUBLISHED: ${POOLSTATIS_MCP_PACKAGE_PUBLISHED:-false}
+    ports:
+      - "${POOLSTATIS_API_PORT:-3300}:3300"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3300/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  admin:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      poolstatis:
+        condition: service_healthy
+    ports:
+      - "${POOLSTATIS_ADMIN_PORT:-8080}:80"
+
+volumes:
+  poolstatis_pgdata:
