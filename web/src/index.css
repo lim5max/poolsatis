@@ -41,7 +41,7 @@
   --color-sidebar-ring: var(--sidebar-ring);
   --font-sans: "Geist", system-ui, sans-serif;
   --font-mono: "Geist Mono", ui-monospace, monospace;
-  --font-serif: "Instrument Serif", Georgia, serif;
+  --font-serif: "STIX Two Text", Georgia, serif;
 }
 
 :root {
@@ -132,7 +132,12 @@
     @apply bg-background text-foreground;
     font-family: var(--font-sans);
   }
-  /* Instrument Serif is for headings only; data/code uses Geist Mono. */
+  /* STIX Two Text is for headings only; data/code uses Geist Mono. */
+  .brand-wordmark {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
   .serif { font-family: var(--font-serif); }
   .mono { font-family: var(--font-mono); font-feature-settings: "tnum"; }
 }

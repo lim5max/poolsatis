@@ -69,7 +69,7 @@ docker compose -f docker-compose.selfhost.yml up -d --build  # self-host stack
   silently fails to open. Don't downgrade React.
 - **Tooltips** need one `<TooltipProvider>` at the root (`web/src/main.tsx`); use the `Hint`
   wrapper from `ui.tsx`. terse badges (reg/wild, category, status) carry tooltips.
-- **Typography:** Instrument Serif for headings ONLY (`.serif`); Geist for body; Geist Mono
+- **Typography:** STIX Two Text for headings ONLY (`.serif`); Geist for body; Geist Mono
   (`font-mono`) for ids/event-names/source/data. No ALL-CAPS eyebrow labels — sentence case.
 - **No magic Tailwind values** — use scale tokens (`text-xs`, `max-w-sm`, `size-6`, `h-9`),
   not `text-[10px]`/`max-w-[360px]`. Metric-category colors are CSS vars `--cat-*` in

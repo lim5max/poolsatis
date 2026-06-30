@@ -61,7 +61,7 @@ function Sidebar() {
   return (
     <aside className="hidden flex-col border-r bg-sidebar py-5 md:flex">
       <div className="px-5 pb-4 md:pb-5">
-        <div className="serif text-2xl flex items-center gap-2.5">
+        <div className="brand-wordmark flex items-center gap-2.5 text-2xl">
           <img className="size-8" src="/poolstatis-logo.svg" alt="" /> Poolstatis
         </div>
         <div className="text-xs text-muted-foreground mt-1">Headless analytics admin</div>
@@ -79,7 +79,7 @@ function MobileTopbar() {
     <header className="sticky top-0 z-30 flex min-h-14 items-center justify-between border-b bg-background/95 px-4 backdrop-blur-md md:hidden">
       <div className="flex min-w-0 items-center gap-2.5">
         <img className="size-7 shrink-0" src="/poolstatis-logo.svg" alt="" />
-        <span className="serif truncate text-xl text-foreground">Poolstatis</span>
+        <span className="brand-wordmark truncate text-xl text-foreground">Poolstatis</span>
       </div>
       <DialogTrigger asChild>
         <Button variant="ghost" size="icon-sm" aria-label="Open navigation">
@@ -102,7 +102,7 @@ function MobileNavDrawer({ onNavigate }: { onNavigate: () => void }) {
       <aside className="flex min-h-full flex-col py-4">
         <div className="flex items-start justify-between gap-3 px-5 pb-4">
           <div className="min-w-0">
-            <div className="serif flex items-center gap-2.5 text-2xl">
+            <div className="brand-wordmark flex items-center gap-2.5 text-2xl">
               <img className="size-8 shrink-0" src="/poolstatis-logo.svg" alt="" /> Poolstatis
             </div>
             <div className="mt-1 text-xs text-muted-foreground">Headless analytics admin</div>

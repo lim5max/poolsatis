@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { Check, Copy } from '@/components/icons';
 import { useStore, useAsync } from '../store';
-import { MCP_CLIENTS, MCP_RUNNER, mcpClientById, mcpServerConfig, type McpClientId } from '../mcpClients';
+import { MCP_CLIENTS, MCP_RUNNER, mcpClientById, mcpServerConfig, type McpClientId, type McpClientLogo } from '../mcpClients';
 import { Panel, Loading, DangerConfirm } from '../components/ui';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
 
 const TOOLS = [
   ['Context', ['list_projects', 'get_project_schema']],
@@ -28,7 +29,10 @@ export function Setup() {
   const selectedClient = mcpClientById(clientId);
 
   const mcpToken = tokenKind === 'user' ? '<replace-with-pt-or-sk>' : token;
-  const mcpConfig = mcpServerConfig(MCP_RUNNER.command, MCP_RUNNER.args, serverUrl.replace(/\/$/, ''), mcpToken);
+  const normalizedServerUrl = serverUrl.replace(/\/$/, '');
+  const mcpConfig = mcpServerConfig(MCP_RUNNER.command, MCP_RUNNER.args, normalizedServerUrl, mcpToken);
+  const mcpCommand = [MCP_RUNNER.command, ...MCP_RUNNER.args].join(' ');
+  const mcpEnv = `POOLSTATIS_URL=${normalizedServerUrl}\nPOOLSTATIS_TOKEN=${mcpToken}`;
   const ingestCurl = `curl -X POST ${serverUrl}/i/v1/events \\
   -H 'Authorization: Bearer pk_…' \\
   -H 'content-type: application/json' \\
@@ -46,10 +50,10 @@ export function Setup() {
         <p className="text-xs text-muted-foreground mt-3.5">After the product sends data, inspect it in <strong className="text-foreground font-normal">Data → Event stream</strong>. Data health shows registered coverage and entity/event consistency; ingest warnings have their own Warnings tab.</p>
       </Panel>
       <Panel title="Connect a coding agent over MCP">
-        <p className="text-muted-foreground text-sm mb-3.5">Choose where Poolstatis should appear, then copy the stdio MCP template. The command, args, and env are standard MCP values; the paste location depends on the host.</p>
+        <p className="text-muted-foreground text-sm mb-3.5">Choose where Poolstatis should appear. The selected card controls the setup guide below; copy the full JSON when the host accepts JSON, or copy command/env separately for form-based settings.</p>
         {MCP_RUNNER.packageStatus !== 'published' && (
-          <div className="mb-3.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
-            MCP runner is not marked published for this deploy. Configure <code>VITE_POOLSTATIS_MCP_COMMAND</code>, <code>VITE_POOLSTATIS_MCP_ARGS</code>, and <code>VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED=true</code> only after the runner exists.
+          <div className="mb-3.5 break-words rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200 [&_code]:break-all">
+            MCP runner is not marked published for this deploy. Use the command below for this self-host build. Set <code>VITE_POOLSTATIS_MCP_PACKAGE_PUBLISHED=true</code> only after the public runner package exists.
           </div>
         )}
         <div className="mb-3.5 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
@@ -59,15 +63,55 @@ export function Setup() {
               type="button"
               onClick={() => setClientId(profile.id)}
               aria-pressed={clientId === profile.id}
-              className={`rounded-md border p-3 text-left transition-colors ${clientId === profile.id ? 'border-primary bg-primary/10 text-foreground' : 'bg-muted/20 text-muted-foreground hover:bg-accent/50 hover:text-foreground'}`}
+              className={cn(
+                'rounded-md border p-3 text-left transition-colors',
+                clientId === profile.id
+                  ? 'border-primary bg-primary/10 text-foreground'
+                  : 'bg-muted/20 text-muted-foreground hover:bg-accent/50 hover:text-foreground',
+              )}
             >
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-sm font-medium">{profile.name}</span>
-                {profile.badge && <Badge variant="outline" className="text-xs">{profile.badge}</Badge>}
+              <div className="flex items-start gap-3">
+                <McpClientLogoMark logo={profile.logo} className="size-9" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="break-words text-sm font-medium">{profile.name}</span>
+                    {profile.badge && <Badge variant="outline" className="text-xs">{profile.badge}</Badge>}
+                  </div>
+                  <div className="mt-1 text-xs leading-relaxed">{profile.pasteTarget}</div>
+                </div>
               </div>
-              <div className="mt-1 text-xs leading-relaxed">{profile.pasteTarget}</div>
             </button>
           ))}
+        </div>
+        <div className="mb-3.5 rounded-md border bg-muted/20 p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex items-start gap-3">
+              <McpClientLogoMark logo={selectedClient.logo} className="size-11" />
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-base font-medium">{selectedClient.name}</h3>
+                  <Badge variant="outline">Selected</Badge>
+                </div>
+                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{selectedClient.description}</p>
+              </div>
+            </div>
+            <div className="flex shrink-0 flex-wrap gap-2">
+              <CopyButton value={mcpConfig}>Copy JSON</CopyButton>
+              <CopyButton value={mcpCommand}>Copy command</CopyButton>
+              <CopyButton value={mcpEnv}>Copy env</CopyButton>
+            </div>
+          </div>
+          <ol className="mt-4 grid gap-2 md:grid-cols-3">
+            {selectedClient.setupSteps.map((step, index) => (
+              <li key={step} className="rounded-md border bg-background p-3">
+                <div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                  <span className="flex size-6 items-center justify-center rounded-full border bg-muted/40 text-foreground">{index + 1}</span>
+                  Step {index + 1}
+                </div>
+                <p className="text-xs leading-relaxed text-muted-foreground">{step}</p>
+              </li>
+            ))}
+          </ol>
         </div>
         {tokenKind === 'user' && (
           <div className="mb-3.5 rounded-md border border-primary/30 bg-primary/5 px-4 py-3 text-xs text-muted-foreground">
@@ -104,6 +148,105 @@ export function Setup() {
       <DangerZone slug={slug} env={env} />
     </div>
   );
+}
+
+const MCP_LOGO_META: Record<McpClientLogo, { color: string; label: string }> = {
+  claude: { color: 'var(--cat-referral)', label: 'Claude' },
+  codex: { color: 'var(--foreground)', label: 'Codex' },
+  cursor: { color: 'var(--cat-quality)', label: 'Cursor' },
+  warp: { color: 'var(--cat-acquisition)', label: 'Warp' },
+  windsurf: { color: 'var(--cat-activation)', label: 'Windsurf' },
+  vscode: { color: 'var(--cat-acquisition)', label: 'VS Code' },
+  cline: { color: 'var(--cat-retention)', label: 'Cline' },
+  zed: { color: 'var(--foreground)', label: 'Zed' },
+  continue: { color: 'var(--cat-activation)', label: 'Continue' },
+  replit: { color: 'var(--cat-referral)', label: 'Replit' },
+  opencode: { color: 'var(--cat-quality)', label: 'OpenCode' },
+  hermes: { color: 'var(--cat-revenue)', label: 'Hermes' },
+  custom: { color: 'var(--muted-foreground)', label: 'Custom MCP' },
+};
+
+function McpClientLogoMark({ logo, className }: { logo: McpClientLogo; className?: string }) {
+  const meta = MCP_LOGO_META[logo];
+  return (
+    <span
+      aria-label={`${meta.label} logo`}
+      className={cn('flex shrink-0 items-center justify-center rounded-md border bg-background', className)}
+      style={{ color: meta.color }}
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true" className="size-5">
+        <McpLogoPath logo={logo} />
+      </svg>
+    </span>
+  );
+}
+
+function McpLogoPath({ logo }: { logo: McpClientLogo }) {
+  switch (logo) {
+    case 'claude':
+      return (
+        <>
+          <circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" strokeWidth="2" />
+          <path d="M12 5v14M5 12h14M7.2 7.2l9.6 9.6M16.8 7.2l-9.6 9.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+        </>
+      );
+    case 'codex':
+      return <path d="M7 7.5 12 4l5 3.5v9L12 20l-5-3.5v-9Zm2 1.1v6.8l3 2.1 3-2.1V8.6l-3-2.1-3 2.1Zm2 1.6 1-0.7 1 0.7v3.6l-1 0.7-1-0.7v-3.6Z" fill="currentColor" />;
+    case 'cursor':
+      return <path d="M5 3.8 19.2 11 13.4 13.2 10.9 19.4 5 3.8Zm4.1 5.1 2.1 5.5 1-2.5 2.4-0.9-5.5-2.1Z" fill="currentColor" />;
+    case 'warp':
+      return (
+        <>
+          <path d="M4 8.5c2.4-2 4.8-2 7.2 0s4.8 2 7.2 0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          <path d="M5.5 13c2-1.6 4-1.6 6 0s4 1.6 6 0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          <path d="M7 17c1.5-1 3-1 4.5 0s3 1 4.5 0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        </>
+      );
+    case 'windsurf':
+      return <path d="M7 19h10M8 16c2.5-1.2 5.5-1.2 8 0M8 4v10l8-3.2L8 4Zm2 3.6 2.8 2.2L10 11V7.6Z" fill="currentColor" />;
+    case 'vscode':
+      return <path d="M19 4.5v15l-4.2-1.8-5.2-4.2-3.1 3L4 15.1 7.9 12 4 8.9l2.5-1.4 3.1 3 5.2-4.2L19 4.5Zm-4 5-3.7 2.5L15 14.5v-5Z" fill="currentColor" />;
+    case 'cline':
+      return (
+        <>
+          <path d="m5 7 4 5-4 5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M11 17h8" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+        </>
+      );
+    case 'zed':
+      return <text x="12" y="16.5" textAnchor="middle" fontSize="13" fontWeight="700" fontFamily="var(--font-mono)" fill="currentColor">Z</text>;
+    case 'continue':
+      return <path d="M6 8.5h7.5a3.5 3.5 0 1 1 0 7H8.8l2.1 2.1-1.4 1.4L5 14.5 9.5 10l1.4 1.4-2.1 2.1h4.7a1.5 1.5 0 0 0 0-3H6v-2Z" fill="currentColor" />;
+    case 'replit':
+      return (
+        <>
+          <path d="M9 3h6v6H9V3ZM3 9h6v6H3V9ZM9 15h6v6H9v-6ZM15 9h6v6h-6V9Z" fill="currentColor" />
+        </>
+      );
+    case 'opencode':
+      return (
+        <>
+          <path d="M8.5 6 4 12l4.5 6M15.5 6 20 12l-4.5 6" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="m13.5 5-3 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </>
+      );
+    case 'hermes':
+      return (
+        <>
+          <path d="M6 14.5c3.2-6.1 6.8-8.4 12-8.5-1.2 5.2-3.6 8.8-8.5 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M8 8.5H4.5M11 6.2H7.5M15 6h-2.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </>
+      );
+    case 'custom':
+      return (
+        <>
+          <circle cx="7" cy="8" r="2.2" fill="currentColor" />
+          <circle cx="17" cy="8" r="2.2" fill="currentColor" />
+          <circle cx="12" cy="17" r="2.2" fill="currentColor" />
+          <path d="M8.8 9.4 11 15M15.2 9.4 13 15M9.4 8h5.2" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </>
+      );
+  }
 }
 
 function KeyUse({ prefix, title, body }: { prefix: string; title: string; body: string }) {
@@ -154,6 +297,26 @@ function DangerZone({ slug, env }: { slug: string; env: string }) {
           onConfirm={async () => { const res = await client!.purgeData(slug, { env, scope: action.scope, confirm_slug: slug }); setResult(`Purged ${env}: ${res.events_deleted} events, ${res.entities_deleted} entities removed.`); setAction(null); }} />
       )}
     </Card>
+  );
+}
+
+function CopyButton({ value, children }: { value: string; children: React.ReactNode }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    } catch {
+      // Clipboard can be blocked by browser policy.
+    }
+  };
+
+  return (
+    <Button variant="outline" size="sm" className="h-8" onClick={copy}>
+      {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+      {copied ? 'Copied' : children}
+    </Button>
   );
 }
 

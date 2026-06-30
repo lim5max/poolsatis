@@ -1,40 +1,57 @@
 # Poolstatis
 
-**Agent-native продуктовая аналитика.** Лёгкий аналог PostHog, в котором основной пользователь — не человек в UI, а кодинг-агент через MCP.
+**Agent-native product analytics.** Poolstatis is a lightweight PostHog-style
+analytics system whose primary user is a coding agent over MCP, not a human
+clicking through dashboards.
 
-Ключевая идея: метрики в платформе рождаются **вместе с семантикой** — каждая метрика регистрируется с ответом на вопрос «зачем она собирается» и местом в воронке. Это делает инсайты вычислимыми, а инструментацию — проверяемой.
+The core idea is that metrics are created with semantics from the start. Every
+metric has a required `purpose`, and every funnel has a `goal`, so
+instrumentation can be inspected, maintained, and queried by agents instead of
+living as unnamed event clutter.
 
-## Source available
+## Source Available
 
-Poolstatis опубликован как source-available под [PolyForm Shield License 1.0.0](LICENSE): core можно читать, запускать и менять для разрешенных сценариев, но нельзя продавать Poolstatis как конкурирующий продукт или предоставлять его как competing hosted/managed service. Правила участия: [CONTRIBUTING.md](CONTRIBUTING.md), security flow: [SECURITY.md](SECURITY.md), release checklist: [docs/09-source-available-release.md](docs/09-source-available-release.md).
+Poolstatis is source-available under the
+[PolyForm Shield License 1.0.0](LICENSE). You can read, run, and modify the
+software for permitted use cases, but you cannot sell Poolstatis as a competing
+product or offer it as a competing hosted or managed service.
 
-Этот repo теперь только про систему: backend, ingest, MCP, SDK, admin SPA, migrations, technical docs и Docker self-host. Публичный лендинг/docs/waitlist вынесены в отдельный локальный repo: `/Users/maksimstil/Desktop/poolsatis-site`.
+See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and the
+[source-available release checklist](docs/09-source-available-release.md) for
+project rules and release hygiene.
 
-## Как это работает
+This repository contains the system itself: backend, ingest API, MCP server,
+SDK, headless admin SPA, migrations, technical docs, and Docker self-hosting.
+The marketing site, public docs UI, waitlist, and future Cloud-only code live in
+separate repositories.
 
-1. Кодинг-агент по нашему стандарту инструментации расставляет метрики в коде продукта и регистрирует их в Poolstatis через MCP.
-2. Продукт шлёт события и сущности по HTTP в наш ингест.
-3. Данные живут у нас; владелец продукта строит дашборды и получает инсайты тоже через MCP — без захода на платформу.
+## How It Works
 
-## Документация
+1. A coding agent instruments a product and registers metrics in Poolstatis
+   through MCP.
+2. The product sends events and entities to the HTTP ingest API.
+3. Poolstatis stores the data and exposes typed query tools, so the customer can
+   build dashboards, checks, and insights in their own environment.
 
-| Документ | Содержание |
-|----------|------------|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Обзор системы, компоненты, принципы |
-| [docs/01-data-model.md](docs/01-data-model.md) | Тенантность, типы данных, схемы таблиц |
-| [docs/02-storage.md](docs/02-storage.md) | Хранилище: Postgres → ClickHouse, путь миграции |
-| [docs/03-mcp-server.md](docs/03-mcp-server.md) | Спецификация MCP-сервера: тулы и ресурсы |
-| [docs/04-http-api.md](docs/04-http-api.md) | Ингест и Query API |
-| [docs/05-gap-analysis.md](docs/05-gap-analysis.md) | Что есть vs PostHog и приоритеты следующих волн |
-| [docs/06-instrumenting-a-product.md](docs/06-instrumenting-a-product.md) | Как занести метрики в продукт (агент/MCP или вручную) |
-| [docs/07-vps-deployment.md](docs/07-vps-deployment.md) | Как раскладывать Platform API, MCP, SDK и skills при деплое |
-| [docs/09-source-available-release.md](docs/09-source-available-release.md) | Как вести source-available релиз и GitHub hygiene |
-| [docs/10-self-host.md](docs/10-self-host.md) | Самый короткий self-host путь через Docker Compose |
-| [docs/11-repository-split.md](docs/11-repository-split.md) | Границы system/site/cloud репозиториев |
-| [sdk/README.md](sdk/README.md) | `@poolstatis/sdk` — клиент для продукта (батчинг, ретраи, flush на unload) |
-| [.claude/skills/poolstatis-instrument](.claude/skills/poolstatis-instrument/SKILL.md) | Skill: процедура инструментации продукта агентом |
+## Documentation
 
-## Локальная разработка
+| Document | What it covers |
+| --- | --- |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | System overview, components, and principles |
+| [docs/01-data-model.md](docs/01-data-model.md) | Tenancy, data types, and table schemas |
+| [docs/02-storage.md](docs/02-storage.md) | Storage design and the Postgres-to-ClickHouse path |
+| [docs/03-mcp-server.md](docs/03-mcp-server.md) | MCP server tools and resources |
+| [docs/04-http-api.md](docs/04-http-api.md) | Ingest and Query API |
+| [docs/05-gap-analysis.md](docs/05-gap-analysis.md) | Current scope versus PostHog and next priorities |
+| [docs/06-instrumenting-a-product.md](docs/06-instrumenting-a-product.md) | Agent and manual instrumentation workflow |
+| [docs/07-vps-deployment.md](docs/07-vps-deployment.md) | Deploying the Platform API, MCP, SDK, and skills |
+| [docs/09-source-available-release.md](docs/09-source-available-release.md) | Source-available release and GitHub hygiene |
+| [docs/10-self-host.md](docs/10-self-host.md) | Short Docker Compose self-hosting path |
+| [docs/11-repository-split.md](docs/11-repository-split.md) | System, site, and Cloud repository boundaries |
+| [sdk/README.md](sdk/README.md) | `@poolstatis/sdk` client usage |
+| [.claude/skills/poolstatis-instrument](.claude/skills/poolstatis-instrument/SKILL.md) | Agent skill for product instrumentation |
+
+## Local Development
 
 ```bash
 docker compose up -d
@@ -45,9 +62,19 @@ pnpm serve
 pnpm --dir web dev
 ```
 
-Перед PR по backend/shared logic запускай `pnpm typecheck && pnpm test`. Перед изменениями админки запускай `pnpm --dir web build`. Публичный сайт меняется в `/Users/maksimstil/Desktop/poolsatis-site`.
+Run backend and shared-logic checks before opening a PR:
 
-## Self-host за 3 команды
+```bash
+pnpm typecheck && pnpm test
+```
+
+Run the admin build before shipping UI changes:
+
+```bash
+pnpm --dir web build
+```
+
+## Self-Host In 3 Commands
 
 ```bash
 docker compose -f docker-compose.selfhost.yml up -d --build
@@ -56,14 +83,16 @@ docker compose -f docker-compose.selfhost.yml run --rm poolstatis \
   node dist/cli/bootstrap.js "Acme" acme "Acme Product"
 ```
 
-Потом открой `http://localhost:8080` и вставь напечатанный `sk_` или `pt_` токен.
-Полная инструкция: [docs/10-self-host.md](docs/10-self-host.md).
+Then open `http://localhost:8080` and paste the printed `sk_` or `pt_` token.
+See the full self-hosting guide in [docs/10-self-host.md](docs/10-self-host.md).
 
-## Быстрый старт
+## Hosted Setup
 
-1. Открой hosted admin, войди через workspace auth и создай первый проект в onboarding.
-2. Сохрани одноразовый `pt_` для MCP-клиента и `pk_` для ingest.
-3. Добавь MCP-сервер в Claude Code, Claude Desktop, Codex, Cursor, Warp, Windsurf, VS Code/Copilot, Cline, Zed, Continue, Replit, OpenCode, Hermes-style launcher или другой MCP host:
+1. Open the hosted admin and create the first project in onboarding.
+2. Save the one-time `pt_` token for the MCP client and `pk_` token for ingest.
+3. Add Poolstatis as an MCP server in Claude Code, Claude Desktop, Codex,
+   Cursor, Warp, Windsurf, VS Code/Copilot, Cline, Zed, Continue, Replit,
+   OpenCode, Hermes-style launchers, or any compatible custom MCP host.
 
 ```json
 {
@@ -71,35 +100,62 @@ docker compose -f docker-compose.selfhost.yml run --rm poolstatis \
     "poolstatis": {
       "command": "pnpm",
       "args": ["--silent", "dlx", "@poolstatis/mcp"],
-      "env": { "POOLSTATIS_URL": "https://api.poolstatis.com", "POOLSTATIS_TOKEN": "pt_…" }
+      "env": {
+        "POOLSTATIS_URL": "https://api.poolstatis.com",
+        "POOLSTATIS_TOKEN": "pt_..."
+      }
     }
   }
 }
 ```
 
-`--silent` обязателен: pnpm иначе печатает баннер в stdout и ломает протокол stdio.
-До публикации `@poolstatis/mcp` этот JSON является publish-ready template; в hosted deploy включай copy-paste flow только после настройки реального MCP runner command/args.
+`--silent` is required because `pnpm` can print a banner to stdout, which breaks
+the stdio MCP protocol.
 
-Отправка событий из продукта:
+Until `@poolstatis/mcp` is published, treat the JSON above as the publish-ready
+template. Hosted deployments should expose copy-paste setup only after the real
+MCP runner command and arguments are configured.
+
+Send product events through the ingest API:
 
 ```bash
 curl -X POST https://api.poolstatis.com/i/v1/events \
-  -H 'Authorization: Bearer pk_…' -H 'content-type: application/json' \
+  -H 'Authorization: Bearer pk_...' \
+  -H 'content-type: application/json' \
   -d '{"events":[{"event":"signup.completed","distinct_id":"u1"}]}'
 ```
 
-Локальный запуск остаётся внутренним dev/workflow для контрибьюторов, но публичный продуктовый путь — hosted admin + MCP client setup.
+## Platform Admin
 
-## Админка платформы
+`web/` is a minimal headless platform admin. It is not a per-project analytics
+dashboard; customers consume analytics through MCP, SDK integrations, or their
+own dashboards.
 
-`web/` — минимальная **headless-админка** (не дашборд продукта: аналитику клиент строит у себя через MCP). Таблицы: проекты, реестр метрик (с активацией/депрекейтом с причиной), данные (health/события/сущности), API-ключи (выпуск/отзыв), onboarding и вкладка **Setup & MCP** с готовыми пресетами для Claude, Codex, Cursor, Warp, Windsurf, VS Code/Copilot, Cline, Zed, Continue, Replit, OpenCode, Hermes-style launchers и custom MCP.
+The admin includes tables for projects, metric registry management, data health,
+events, entities, API keys, onboarding, and Setup & MCP presets. In hosted mode,
+human login is handled through Auth0/OIDC, while scoped Poolstatis keys remain
+the runtime access model:
 
-В hosted-режиме вход идёт через Auth0/OIDC. Scoped keys (`pk_`, `sk_`, `pt_`) остаются для продукта, CI и MCP-клиентов.
+- `pk_` ingest keys are write-only and safe for product clients.
+- `sk_` secret keys provide project-level platform access.
+- `pt_` personal tokens provide organization-wide MCP access.
 
-## Статус
+## Status
 
-Реализовано: ингест, реестр метрик с семантикой, воронки, сущности, Query DSL
-(**trend / funnel / entities / retention / lifecycle / stickiness**), MCP-сервер
-с typed tools/resources, headless-админка, стандарт инструментации и
-[skill](.claude/skills/poolstatis-instrument/SKILL.md) для агентов. Следующая волна (см. [docs/05-gap-analysis.md](docs/05-gap-analysis.md)):
-actor-merge/identity, статические когорты, feature flags + эксперименты, funnel-correlation.
+Implemented:
+
+- HTTP ingest API
+- Semantic metric registry
+- Funnels
+- Entities
+- Query DSL for `trend`, `funnel`, `entities`, `retention`, `lifecycle`, and
+  `stickiness`
+- MCP server with typed tools and resources
+- Headless admin SPA
+- Instrumentation standard
+- Agent instrumentation skill
+- Docker Compose self-hosting path
+
+Next priorities are tracked in [docs/05-gap-analysis.md](docs/05-gap-analysis.md):
+actor merge and identity, static cohorts, feature flags, experiments, and funnel
+correlation.
